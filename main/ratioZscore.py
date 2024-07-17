@@ -302,6 +302,10 @@ print('Prevalence is assumed to be per 100,000 and is divided by 100 for z-scori
 df4.Prevalence = df4.Prevalence/100
 df4['Expected Prevalence'] = df4['Expected Prevalence'] /100
 
+print('Incidence is assumed to be per 100,000 and is divided by 10 for z-scoring')
+df4.Incidence = df4.Incidence/10
+df4['Expected Incidence'] = df4['Expected Incidence'] /10
+
 prev_z = calculate_subgroup_z_scores(df4.drop('Overall',level='Group'),'Prevalence','Expected Prevalence')
 inc_z = calculate_subgroup_z_scores(df4.drop('Overall',level='Group'),'Incidence','Expected Incidence')
 
