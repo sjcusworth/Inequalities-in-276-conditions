@@ -38,3 +38,5 @@ echo "Censor small numbers complete"
 echo "format started"
 python3 main/formatPublish.py
 echo "format complete"
+
+main/tidyImdCategories.py
