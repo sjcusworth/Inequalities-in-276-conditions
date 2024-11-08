@@ -9,10 +9,13 @@ from re import search, sub
 from tqdm import tqdm
 from numpy import isnan as npisnan
 from numpy import vectorize as npvectorize
+from seaborn import husl_palette
+from dash import html, dcc
 
 import pandas as pd
-from plotly.graph_objects import Layout, Scatter, Table, Figure
+from plotly.graph_objects import Layout, Scatter, Table, Figure, Bar
 from plotly.subplots import make_subplots
+import plotly.io as pio
 
 
 class Visualisation:
@@ -21,6 +24,9 @@ class Visualisation:
     plotting the data.
 
     Ensure plotly version >=5.12.0 (although tested on 5.15.0)
+
+    Note:
+        In plot_scatter, the output of ylims_def is used in get_scatterLayout, which auto defines the y-axis range. Therefore, the actual y-axis limits are not reflected by ylims_def
     """
 
     def __init__(
@@ -34,12 +40,15 @@ class Visualisation:
 
         self.label_map = label_map
         self.sf: float = sf
-        self.ylims_def = lambda x: [0, x.max() + x.max() / 4]
+        self.ylims_def = lambda x: [0, x.max() + x.max() / 6.5]
+        self.ylimsNeg_def = lambda x: [x.min()+(x.min()/6.5), x.max()+(x.max()/6.5)]
         self.ignore = []
         self.legends = {}
+        self.legends_dash = {}
         self.sepPlots = dict()
         self.colours = colours
         self.to_json = to_json
+        self.defaultCName = "Overall"
 
         # Plot Formatting
         self.dict_lay: dict[str, Any] = dict(
@@ -54,28 +63,35 @@ class Visualisation:
             #title
             title_font_size=25 * self.sf,
             title_xanchor="left",
+            title_pad={'t':20, 'b':20, 'l':30, 'r':20,},
 
             #axes
             axes_title_font_size=15 * self.sf,
-            axes_showgrid=True,
-            axes_gridcolour="rgba(156, 156, 156, 0.5)",
+            x_axis_showgrid=True,
+            y_axis_showgrid=False,
             axes_showline=True,
             axes_showspikes=True,
-            axes_gridcolor="rgba(156, 156, 156, 0.5)",
+            axes_gridcolor="rgba(156, 156, 156, 0.7)",
             axes_linecolor="grey",
             axes_gridwidth=0.5*self.sf,
             axes_showticklabels=True,
             axes_tickfont_size=12 * self.sf,
-            x_axis_tickangle=0,
+            x_axis_tickangle=45,
             y_axis_tickangle=0,
             x_axis_dtick="M12",
+            y_axis_dtick=None, #5
             x_axis_tick0=None,
             x_axis_autorange=True,
             y_axis_autorange=False,
-            nticks=5,
+            y_axis_nticks=5,
+            x_axis_nticks=5,
             x_axis_ticklabelstep=5,
             y_axis_ticklabelstep=10,
-            axes_title_standoff=0.3,
+            axes_title_standoff=10,
+            plot_scattergap = 0.75,
+            axes_exponentformat="e",
+            x_axis_rndFactor=1,
+            y_axis_rndFactor=1,
 
             #background
             plot_bgcolor="white",
@@ -87,65 +103,106 @@ class Visualisation:
             background_x1=1,
 
             #plot lines and points
-            dash_types=["solid", "dash"],
-            line_width=3 * self.sf,
-            marker_size=8 * self.sf,
-            highlightMarker_line_width=5,
-            highlightMarker_line_colour="red",
+            dash_types=["solid"],#["solid", "dot", "dash", "longdash", "dashdot", "longdashdot"],
+            line_width=1.5 * self.sf,
+            marker_size=7 * self.sf,
+            highlightMarker_size=15 * self.sf,
+            highlightMarker_colour="red",
             marker_opacity=0.8,
+            line_opacity=0.8,
             error_y_type="data",
             error_y_symmetric=False,
-            error_y_thickness=1.5 * self.sf,
+            error_y_thickness=1.3 * self.sf,
             error_y_width=0.5 * self.sf,
 
+            #bars
+            bar_opacity=0.8,
+
             #legend
-            legend_font_size=15,
+            legend_font_size=15 * self.sf,
             legend_yanchor="top",
-            legend_xanchor="right",
-            legend_y=0,
-            legend_x=0,
+            legend_xanchor="left",
+            legend_y=0.99,
+            legend_x=1.01,
             legend_title_text="Subgroups: ",
             legend_valign="middle",
 
-            #AutoAnalysis output format
+            #output format
             autosize=False,
             height_perPlot = 300*self.sf,
             width=700*self.sf,
             title_xref="paper",
             title_x=0,
             table_font_size=12*self.sf,
+            table_font_color=None,
             table_columnwidth=[1,3,3],
-            table_height=45*self.sf,
+            table_header_height=20*self.sf,
+            table_header_sizeMulti=1.2,
+            table_cells_align="left",
+            table_header_align="left",
+            table_cells_height=45*self.sf,
+            table_header_bgcolor=None,
+            table_cells_bgcolor=None,
             subplot_vertical_spacing=None,
+            margin={'t':100, 'b':20, 'l':50, 'r':20,},
             )
 
-        self.dict_font: dict[str, object] = dict(
+    def make_dict_font(self):
+        return dict(
             family=self.dict_lay["font_family"], color=self.dict_lay["font_color"]
         )
-        self.dict_title: dict[str, object] = dict(
-            font_size=self.dict_lay["title_font_size"], xanchor=self.dict_lay["title_xanchor"]
+
+    def make_dict_title(self):
+        return dict(
+            font_size=self.dict_lay["title_font_size"],
+            xanchor=self.dict_lay["title_xanchor"],
+            pad=self.dict_lay["title_pad"],
+            font_family=self.dict_lay["font_family"],
+            xref=self.dict_lay["title_xref"],
         )
 
-    def highlight_point(self, name_col, highlight, col):
+    def highlight_point(self, name_col, highlight, col, highlight_col=None,):
+        """
+
+        Args:
+            name_col:
+            highlight:
+            col:
+            highlight_col:
+
+        Returns:
+            Tuple(Dict, bool): Dictionary of marker layout, indicator to whether point has been highlighted
+
+        Notes:
+            If highlight is None, does the same as self.make_dict_marker.
+
+        """
         dict_marker = self.make_dict_marker(color=col[name_col])
+        highlightedPoint=False
+        if highlight_col is None:
+            highlight_col = name_col
         if highlight is not None:
-            if isinstance(name_col, str):
-                name_col_ = name_col.split(",")
-            else:
-                name_col_ = name_col
-            highlight_point = all([any(''.join(e for e in substring if
-                                           e.isalnum()) in
-                                   ["".join(e for e in x if e.isalnum()) for x in name_col_]
-                                   for substring in filter_) for
-                               filter_ in highlight])
+            if not isinstance(highlightedPoint, str):
+                #for type float nan values
+                highlightedPoint = str(highlightedPoint)
+            if isinstance(highlight_col, str):
+                highlight_col = [highlight_col]#highlight_col.split(",")
+            highlight_point = [
+                    # is filter_ in column to highlight
+                    "".join([e for e in filter_ if e.isalnum()]).lower() in [
+                        "".join([e for e in x if e.isalnum()]).lower() for x in highlight_col
+                    ] for filter_ in highlight]
+            #highlight_point = all(any(highlight_point))
+            highlight_point = any(highlight_point)
 
             if highlight_point and len(highlight) > 0:
-                dict_marker["line"] = {"color": self.dict_lay["highlightMarker_line_colour"],
-                                       "width": self.dict_lay["highlightMarker_line_width"],}
-            else:
-                dict_marker["line"] = None
+                highlightedPoint=True
+                #dict_marker["line"] = {"color": self.dict_lay["highlightMarker_colour"],
+                                       #"size": self.dict_lay["highlightMarker_size"],}
+                dict_marker["color"] = self.dict_lay["highlightMarker_colour"]
+                dict_marker["size"] = self.dict_lay["highlightMarker_size"]
 
-        return dict_marker
+        return dict_marker, highlightedPoint
 
 
 
@@ -265,7 +322,7 @@ class Visualisation:
 
         return df_temp
 
-    def updateLayout_subplots(self, plots, layout, out_row_n, subcat, shapes):
+    def updateLayout_subplots(self, plots, layout, out_row_n, title_text, shapes):
         """
         Update layout of subplots using output from plot_incprev()
 
@@ -283,14 +340,10 @@ class Visualisation:
             layout options. If using without plot_incprev(), pass in \
             layout_out as a tuple of 1 element (layout_out).
         """
-        if subcat is not None:
-            title_text = subcat
-        else:
-            title_text = None
-
         #Prevents overwriting x and y axes of all subplots
         layout.xaxis=None
         layout.yaxis=None
+        layout.title=None
 
         plots.update_layout(
             layout,
@@ -298,17 +351,13 @@ class Visualisation:
             height=self.dict_lay["height_perPlot"] * out_row_n,
             width=self.dict_lay["width"],
             title_text=title_text,
-            title_font_family=self.dict_lay["font_family"],
-            title_font_size=self.dict_lay["title_font_size"],
-            title_xref=self.dict_lay["title_xref"],
-            title_xanchor=self.dict_lay["title_xanchor"],
-            title_x=self.dict_lay["title_x"],
             shapes=shapes,
-            plot_bgcolor=self.dict_lay["plot_bgcolor"],
         )
+
         return plots
 
-    def make_dict_dash_type(self, data: pd.DataFrame) -> dict[str, str]:
+    def make_dict_dash_type(self, data: pd.DataFrame,
+                            c_name=None) -> dict[str, str]:
         """
         Make layout dictionary
 
@@ -321,11 +370,23 @@ class Visualisation:
         Usage:
             make_dict_dash_type()
         """
-        lay: list[str] = self.dict_lay["dash_types"]
-        dash_type = dict(zip(set(data["results"]), lay))
+        if c_name is None:
+            lay: list[str] = self.dict_lay["dash_types"]
+            dash_type = dict(zip(set(data["results"]), lay))
+        else:
+            lay: list[str] = self.dict_lay["dash_types"]
+            if len(set(data[c_name])) > len(lay):
+                multiFact = ceil(len(set(data[c_name])) / len(lay))
+                lay = lay*multiFact
+
+            dash_type = dict(zip(set(data[c_name]), lay))
+
         return dash_type
 
-    def make_dict_col(self, data: pd.DataFrame, c_name: str) -> Union[dict[str, str], None]:
+    def make_dict_col(self, data: pd.DataFrame,
+                      c_name: str,
+                      l: float = 0.55,
+                      s: float = 0.8) -> Union[dict[str, str], None]:
         """
         Make layout dictionary
 
@@ -339,7 +400,10 @@ class Visualisation:
         Usage:
             make_dict_col()
         """
-        colours = self.getColours(n=len(set(data[c_name])))
+        #colours = self.getColours(n=len(set(data[c_name])))
+        colours = husl_palette(len(set(data[c_name])),
+                               l=l,
+                               s=s).as_hex()
         col = dict(zip(set(data[c_name]), colours))
         return col
 
@@ -357,7 +421,7 @@ class Visualisation:
         Usage:
             make_dict_line()
         """
-        opacity = self.dict_lay["marker_opacity"]
+        opacity = self.dict_lay["line_opacity"]
         colour = color[1:]
         colour = [str(int(colour[0:2], 16)),
             str(int(colour[2:4], 16)),
@@ -392,6 +456,25 @@ class Visualisation:
         )
         return dict_marker
 
+    def make_dict_bar(self, color: str) -> dict[str, object]:
+        """
+        Make layout dictionary for
+
+        Parameters:
+            color (str): color
+
+        Returns:
+            dict: dictionary of layout options
+
+        Usage:
+            make_dict_marker()
+        """
+        dict_marker = dict(
+            color=color,
+            opacity=self.dict_lay["bar_opacity"],
+        )
+        return dict_marker
+
     def make_dict_error_y(
         self, array: pd.Series, arrayminus: pd.Series
     ) -> dict[str, Union[str, bool, pd.Series, float, int]]:
@@ -421,6 +504,9 @@ class Visualisation:
     def make_dict_axes(
         self,
         ylims: list[Union[float, int]],
+        y_var: str,
+        xlims=None,
+        x_var: str=None,
         x_start=None,
     ) -> tuple[dict[str, object], dict[str, object]]:
         """
@@ -440,13 +526,16 @@ class Visualisation:
             x_tick0 = x_start
         else:
             x_tick0 = self.dict_lay["x_axis_tick0"]
+        if xlims is not None:
+            x_tick0 = xlims[0]
+
 
         dict_xaxis = dict(
             title_font_size=self.dict_lay["axes_title_font_size"],
             title_font_family=self.dict_lay["font_family"],
             title_standoff=self.dict_lay["axes_title_standoff"],
             autorange=self.dict_lay["x_axis_autorange"],
-            showgrid=self.dict_lay["axes_showgrid"],
+            showgrid=self.dict_lay["x_axis_showgrid"],
             showline=self.dict_lay["axes_showline"],
             showspikes=self.dict_lay["axes_showspikes"],
             gridcolor=self.dict_lay["axes_gridcolor"],
@@ -457,12 +546,20 @@ class Visualisation:
             tickfont_family=self.dict_lay["font_family"],
             tickangle=self.dict_lay["x_axis_tickangle"],
             dtick=self.dict_lay["x_axis_dtick"],
+            exponentformat=self.dict_lay["axes_exponentformat"],
         )
+
         dict_yaxis = dict_xaxis.copy()
+        dict_yaxis["dtick"] = self.dict_lay["y_axis_dtick"]
         dict_yaxis["tickangle"] = self.dict_lay["y_axis_tickangle"]
         dict_yaxis["autorange"] = self.dict_lay["y_axis_autorange"]
-        def y_round(x, nticks=10):
+        dict_yaxis["showgrid"] = self.dict_lay["y_axis_showgrid"]
+
+        def xy_round(x, nticks=10, axis="y"):
+            #Haven't tested effect of rndFactor yet
+            rndFactor = self.dict_lay[f"{axis}_axis_rndFactor"]
             n=0
+            x = x*rndFactor
             if x != 0:
                 while x>=10:
                     x = x/10
@@ -475,19 +572,35 @@ class Visualisation:
             x = maxi*(10**n) / nticks
             maxi = maxi*(10**n)
 
-            return [x, maxi]
-        ticks = y_round(ylims[1]-ylims[0],
-                        nticks=self.dict_lay["nticks"])
-        subdivide_y = self.dict_lay["y_axis_ticklabelstep"]
+            return [x/rndFactor, maxi/rndFactor]
 
-        dict_yaxis["dtick"] = ticks[0] / subdivide_y
-        dict_yaxis["range"] = [ylims[0], ticks[1]]
+        ticks = xy_round(ylims[1]-ylims[0],
+                        nticks=self.dict_lay["y_axis_nticks"])
+        subdivide_y = self.dict_lay["y_axis_ticklabelstep"]
+        if self.dict_lay["y_axis_dtick"] is None:
+            dict_yaxis["dtick"] = ticks[0] / subdivide_y
+        dict_yaxis["range"] = [ylims[0], ylims[0]+ticks[1]]
         dict_yaxis["ticklabelstep"] = subdivide_y
 
-        dict_xaxis["tick0"]=x_tick0
-        dict_xaxis["ticklabelstep"]=self.dict_lay["x_axis_ticklabelstep"]
+        if xlims is not None:
+            subdivide_x = self.dict_lay["x_axis_ticklabelstep"]
+            ticks_x = xy_round(xlims[1]-xlims[0],
+                        nticks=self.dict_lay["x_axis_nticks"],
+                               axis="x")
+            dict_xaxis["dtick"] = ticks_x[0] / subdivide_x
+            dict_xaxis["range"] = [xlims[0], xlims[0]+ticks_x[1]]
+            dict_xaxis["ticklabelstep"] = subdivide_x
+        else:
+            dict_xaxis["tick0"]=x_tick0
+            dict_xaxis["ticklabelstep"]=self.dict_lay["x_axis_ticklabelstep"]
 
-        return (dict_xaxis, dict_yaxis)
+        dict_xaxis["title_text"] = x_var
+        dict_yaxis["title_text"] = y_var
+
+        ylims[0] = dict_yaxis["range"][0]
+        ylims[1] = dict_yaxis["range"][1]
+
+        return dict_xaxis, dict_yaxis, ylims
 
     def make_dict_background(self, i1: Union[int, str], i2: Union[int, str] = 1) -> dict[str, object]:
         """
@@ -538,312 +651,273 @@ class Visualisation:
             size=self.dict_lay["table_font_size"],
             color=self.dict_lay["font_color"],
         )
+        if self.dict_lay["table_font_color"] is not None:
+            font["color"]=self.dict_lay["table_font_color"]
 
         dict_table = dict(
             header = dict(
                 font = font.copy(),
-                height=self.dict_lay["table_height"]*1.2,
+                height=self.dict_lay["table_header_height"]*self.dict_lay["table_header_sizeMulti"],
+                align=self.dict_lay["table_header_align"],
+                fill_color=self.dict_lay["table_header_bgcolor"],
             ),
             cells = dict(
                 font = font.copy(),
-                height=self.dict_lay["table_height"],
+                align=self.dict_lay["table_cells_align"],
+                height=self.dict_lay["table_cells_height"],
+                fill_color=self.dict_lay["table_cells_bgcolor"],
             ),
             columnwidth=self.dict_lay["table_columnwidth"],
         )
-        dict_table["header"]["font"]["size"] = font["size"]*1.2
+        dict_table["header"]["font"]["size"] = font["size"]*self.dict_lay["table_header_sizeMulti"]
         return dict_table
 
-    def plot_incprev(
-        self,
-        data: pd.DataFrame,
-        studyName: str,
-        subgroups: bool = False,
-        c_name: str = "OVERALL",
-        ylims: Union[list[float], None] = None,
-        incprev: bool = True,
-        legend: bool = True,
-        withLine: bool = True,
-        const = 100_000,
-        yearFilter_low = 2006,
-        yearFilter_high = 2020,
-        highlight = None,
-    ) -> tuple[list[Scatter], Layout,]:
-        """
-        Prepare input inc/prev data
-        Uses plotly library to generate traces and layout for inc/prev data.
-        Can plot, on y-axis, overall inc/prev, subgrouped inc/prev, or a user-defined numerical column (e.g. Numerator)
-        plotted against time (x-axis).
 
-        Parameters:
-            data (pd.DataFrame): Data to be visualised
-            studyName (str): One of c("Incidence", "Prevalence", "Numerator", "Denominator", "PersonYears")
-            subgroups (bool): is data subgrouped?
-            c_name (str): column name of the subgroup levels
-            ylims (list): vector of c(y_min, y_max), designating y-axis range.
-                        If null, then will automatically set c(0, max(data[`studyName`])+(max(data[`studyName`])/5) )
-            incprev (bool): Are incidence/prevelance values being plotted on the y-axis?
-            legend (bool): Should traces include legends? (default True)
-            withLine (bool): Should plot include line graph elements?
+    def outPlots(self,
+                 traces,
+                 layout,
+                 label=None,
+                 method: str = "trace",
+                 toDisk=True):
+        """
+        method: [trace | figure | interactive | div | png]
+        """
+        if method == "trace":
+            return traces, layout
+
+        elif method == "figure" or method == "interactive":
+            plot = Figure(
+                data = traces,
+                layout = layout
+            )
+
+            if method == "interactive":
+                if not toDisk:
+                    return plot
+                else:
+                    plot.write_html(f"{label}.html")
+                    return label
+            else:
+                return plot
+
+        elif method == "png":
+            plot = Figure(
+                data = traces,
+                layout = layout
+            )
+            for i, x in enumerate(plot.layout.annotations):
+                x.update(
+                         font={"size": 40,
+                               "family": self.dict_lay["font_family"]}
+                         )
+
+            pio.kaleido.scope.mathjax = None
+            dpi = self.dict_lay["dpi"]
+            plot.write_image(f"{label}.png",
+                             engine="kaleido",
+                             width=14/2*dpi,
+                             height=12.7/3*dpi,
+                             scale=8,)
+            return label
+
+        elif method == "div":
+            plot = Figure(
+                data = traces,
+                layout = layout
+            )
+            divObj = html.Div([
+                dcc.Graph(figure=plot)
+                ])
+
+            return divObj
+
+
+
+    def update_subgroupColours(self, data, c_name, subgrouping=None, useObjectColours=True):
+        """
+
+        Args:
+            data:
+            c_name:
+            subgrouping (None|str): String to use as identifier of collection of labels in passed data c_name column
+            makeNewDict (bool): Update and use self colour dict, or return new
 
         Returns:
-            plot (list): list of plotly.trace
-            layout (plotly.Layout): Defines layout of traces
-            dict_xaxis (dict): Defines plotly x-axis formatting
-            dict_yaxis (dict): Defines plotly y-axis formatting
-
-        Usage:
-            plot_incprev(data, studyName) OR plot_incprev(data, studyName, TRUE, c_name)
-
-        Details:
-            If subgroups==TRUE, must define c_name.
-            If plotting numerator/denominator, then set incprev==FALSE.
-            If incprev==TRUE, studyName must be one of c("Incidence", "Prevalence")
 
         Notes:
-            If comparing datasets with same levels and format, the function can accomodate 2 of these,
-            where both will be plot on same axes but with different linetypes and point shapes.
-            A field 'results' should be present defining the dataset data belongs too.
-            If data input does not have a 'results' column, function will treat all data as coming from the same dataset.
+            Subgrouping allows grouping of colour dictionaries under user-defined labels
+
         """
+        if subgrouping is None:
+            subgrouping = c_name
 
-        if studyName == "Incidence":
-            ylab_text = f"Incidence / {const} Person Years"
-        elif studyName == "Prevalence":
-            ylab_text = f"Prevalence / {const} Population"
-        else:
-            ylab_text = studyName
-
-        #data_map = [True if x is not pd.NA or not npisna(x) else False for x in data[studyName]]
-        data = data[(data[studyName].notna() | ~data[studyName].apply(npisnan))]
-        if yearFilter_low is not None:
-            data = data[(data["Year"].dt.year>=yearFilter_low)]
-        if yearFilter_high is not None:
-            data = data[(data["Year"].dt.year<=yearFilter_high)]
-        #data = data.loc[data_map]
-
-        if ylims is None:
-            ylims = self.ylims_def(data[studyName])
-
-        upper_limit = [x if x > ylims[1] else pd.NA for x in data[studyName]]
-        data = data.assign(upper_limit=upper_limit)
-
-        if "results" not in data.columns:
-            data = data.assign(results=["NotRequired"] * len(data.index))
-
-        dash_type = self.make_dict_dash_type(data)
-        #sort data by c_name to ensure legends in correct order
-        try:
-            data[c_name] = pd.to_numeric(data[c_name])
-        except:
-            pass
-        data.sort_values(by=c_name, inplace=True)
-
-        if subgroups == True and c_name in self.legends.keys()\
-                and self.legends[c_name] is not None:
-            col = self.legends[c_name]
-            #check all levels are in dict
-            #if not, add levels to c_name's colour dictionary
-            levels = []
-            for name_res, group_res in data.groupby("results"):
-                for name_col, group_col in group_res.groupby(c_name):
+        if useObjectColours:
+            if subgrouping in self.legends.keys() and self.legends[subgrouping] is not None:
+                col = self.legends[subgrouping]
+                dash_type = self.legends_dash[subgrouping]
+                #check all levels are in dict
+                #if not, add levels to c_name's colour dictionary
+                levels = []
+                for name_col, group_col in data.groupby(c_name):
                     levels.append(name_col)
-                break
-            stored = set(col.keys())
-            levels = set(levels)
-            check = levels == col
-            if check == False:
-                diff = levels.difference(col)
-                for i, x in enumerate(diff):
-                    col[x] = self.getColours(len(stored)+i)[len(stored)+i]
-                self.legends[c_name] = col
 
-        elif subgroups == True and c_name not in self.legends.keys():
-            col = self.make_dict_col(data, c_name)
-            self.legends[c_name] = col
+                stored = set(col.keys())
+                levels = set(levels)
+                check = levels == col
+                if not check:
+                    diff = levels.difference(col)
+                    for i, x in enumerate(diff):
+                        col[x] = self.getColours(len(stored)+i)[len(stored)+i-1]
+                        dash_type[x] = self.dict_lay["dash_types"][(len(stored)+i) % len(self.dict_lay["dash_types"])]
+                    self.legends[subgrouping] = col
+
+            elif subgrouping not in self.legends.keys():
+                col = self.make_dict_col(data, c_name)
+                dash_type = self.make_dict_dash_type(data, c_name)
+                self.legends[subgrouping] = col
+                self.legends_dash[subgrouping] = dash_type
+
         else:
             col = self.make_dict_col(data, c_name)
+            dash_type = self.make_dict_dash_type(data, c_name)
 
         if col is None:
             print(f"Failed for {c_name}")
             return None, None
 
-        # Plotting
-        if subgroups == False:
-            plot = []
-            for name, group in data.groupby("results"):
-                group.sort_values(by="Year", inplace=True)
+        return col, dash_type
 
-                dict_line = self.make_dict_line(color=self.getColours(n=1)[0], dash=dash_type[name])
 
-                dict_error_y = self.make_dict_error_y(
-                    array=group["Upper"] - group[studyName],
-                    arrayminus=group[studyName] - group["Lower"],
-                )
-                dict_error_y["color"] = dict_line["color"]
+    def traceFormatPrep(self,
+                        data,
+                        c_name,
+                        col_colour,
+                        useObjectColours=False,
+                        colourDictionaryId=None,):
 
-                dict_marker = self.make_dict_marker(color=self.getColours(n=1)[0])
+        if c_name is None:
+            c_name = self.defaultCName
 
-                plot.append(
-                    Scatter(
-                        x=group["Year"],
-                        y=group[studyName],
-                        mode="markers",
-                        marker=dict_marker,
-                        error_y=dict_error_y,
-                        showlegend=False,
-                    )
-                )
-                if withLine:
-                    plot.append(
-                        Scatter(
-                            x=group["Year"],
-                            y=group[studyName],
-                            mode="lines",
-                            marker=dict_marker,
-                            line=dict_line,
-                            showlegend=legend,
-                            legendgroup="group",
-                            name="overall",
-                        )
-                    )
+        if col_colour is not None:
+            colourLabelMap = dict(zip(data[c_name].to_list(),
+                                      data[col_colour].to_list()))
+            colourCol = col_colour
+        else:
+            colourLabelMap = None
+            colourCol = c_name
 
-        elif incprev == True:
-            plot = []
-            for name_res, group_res in data.groupby("results"):
-                for name_col, group_col in group_res.groupby(c_name):
-                    skip = False
-                    if name_col not in self.ignore:
-                        for x in self.ignore:
-                            if str(name_col).find(f"'{x}'") != -1:
-                                skip=True
-                                break
-                    else:
-                        skip=True
-                    if skip==True:
-                        continue
+        col, dash_type = self.update_subgroupColours(data,
+                                                     colourCol,
+                                                     subgrouping=colourDictionaryId,
+                                                     useObjectColours=useObjectColours)
 
-                    group_col.sort_values(by="Year", inplace=True)
+        return colourLabelMap, col, dash_type
 
-                    dict_line = self.make_dict_line(color=col[name_col], dash=dash_type[name_res])
 
-                    dict_error_y = self.make_dict_error_y(
-                        array=group_col["Upper"] - group_col[studyName],
-                        arrayminus=group_col[studyName] - group_col["Lower"],
-                    )
-                    dict_error_y["color"] = dict_line["color"]
+    def dataPrep(self,
+                 data,
+                 y_var,
+                 x_var,
+                 c_name,
+                 y_filterLow,
+                 y_filterHigh,
+                 ylims=None,
+                 xlims=None,
+                 ):
 
-                    dict_marker = self.highlight_point(
-                            name_col,
-                            highlight,
-                            col
-                    )
-                    plot.append(
-                        Scatter(
-                            x=group_col["Year"],
-                            y=group_col[studyName],
-                            mode="markers",
-                            marker=dict_marker,
-                            error_y=dict_error_y,
-                            showlegend=False,
-                        )
-                    )
-                    if withLine:
-                        plot.append(
-                            Scatter(
-                                x=group_col["Year"],
-                                y=group_col[studyName],
-                                mode="lines",
-                                marker=dict_marker,
-                                line=dict_line,
-                                showlegend=legend,
-                                legendgroup="group",
-                                name=name_col,
-                            )
-                        )
+        data = data[(data[y_var].notna() | ~data[y_var].apply(npisnan))]
 
-            plot = []
-            for name_res, group_res in data.groupby("results"):
-                for name_col, group_col in group_res.groupby(c_name):
-                    skip = False
-                    if name_col not in self.ignore:
-                        for x in self.ignore:
-                            if str(name_col).find(f"'{x}'") != -1:
-                                skip=True
-                                break
-                    else:
-                        skip=True
-                    if skip==True:
-                        continue
+        is_yNumeric = str(data[y_var].dtype).lower().startswith("int") or \
+                str(data[y_var].dtype).lower().startswith("float")
+        is_xNumeric = str(data[x_var].dtype).lower().startswith("int") or \
+                str(data[x_var].dtype).lower().startswith("float")
 
-                    group_col.sort_values(by="Year", inplace=True)
+        if y_filterLow is not None and is_yNumeric:
+            data = data[(data[y_var].dt.year>=y_filterLow)]
+        if y_filterHigh is not None and is_yNumeric:
+            data = data[(data[y_var].dt.year<=y_filterHigh)]
 
-                    dict_line = self.make_dict_line(color=col[name_col], dash=dash_type[name_res])
-                    dict_marker = self.highlight_point(
-                        name_col,
-                        highlight,
-                        col
-                    )
+        if data[y_var].min()>=0:
+            ylims_def = self.ylims_def
+        else:
+            ylims_def = self.ylimsNeg_def
 
-                    plot.append(
-                        Scatter(
-                            x=group_col["Year"],
-                            y=group_col[studyName],
-                            mode="markers",
-                            marker=dict_marker,
-                            showlegend=False,
-                        )
-                    )
-                    if withLine:
-                        plot.append(
-                            Scatter(
-                                x=group_col["Year"],
-                                y=group_col[studyName],
-                                mode="lines",
-                                marker=dict_marker,
-                                line=dict_line,
-                                showlegend=legend,
-                                legendgroup="group",
-                                name=name_col,
-                            )
-                        )
+        if ylims is None:
+            ylims = ylims_def(data[y_var])
+        if is_xNumeric:
+            if data[x_var].min()>=0:
+                xlims_def = self.ylims_def
+            else:
+                xlims_def = self.ylimsNeg_def
 
-        dict_xaxis, dict_yaxis = self.make_dict_axes(ylims,
-                                                     data["Year"].min())
-        dict_xaxis["title_text"] = "Year"
-        dict_yaxis["title_text"] = f"{ylab_text}"
-        layout = Layout(
-            # title_text=f"{studyName} Trend by {c_name}",
-            legend_title_text="Subcategories:",
-            legend_title_font_size=self.dict_lay["legend_font_size"] *1.3 * self.sf,
-            legend_font_size=self.dict_lay["legend_font_size"] * self.sf,
-            legend_font_family=self.dict_lay["font_family"],
-            legend_valign=self.dict_lay["legend_valign"],
-            scattermode="group",
-            scattergap=0.75,
-            font=self.dict_font,
-            title=self.dict_title,
-            xaxis=dict_xaxis,
-            yaxis=dict_yaxis,
-        )
+            if xlims is None:
+                xlims = xlims_def(data[x_var])
 
-        return (plot, layout)
+        upper_limit = [x if x > ylims[1] else pd.NA for x in data[y_var]]
+        data = data.assign(upper_limit=upper_limit)
+
+
+        if "results" not in data.columns:
+            data = data.assign(results=["NotRequired"] * len(data.index))
+
+        dash_type = self.make_dict_dash_type(data)
+
+        if c_name is None:
+            c_name = self.defaultCName
+            data = pd.concat([data.reset_index(),(pd.Series([c_name]*data.shape[0],
+                                     name=c_name,
+                                     dtype="string",))],
+                             axis=1)
+        else:
+            try:
+                data[c_name] = pd.to_numeric(data[c_name])
+            except:
+                pass
+            else:
+                data[c_name] = pd.to_numeric(data[c_name])
+
+            data[c_name] = data[c_name].fillna("Null")
+            data = data.sort_values(by=c_name)
+
+        data_notMissingSubset = data[y_var].notna()
+        data = data[(data_notMissingSubset)]
+
+
+        #Hard-coded for now, needs an update
+        if c_name=="Deprivation":
+            if "Ireland" in data[c_name].tolist():
+                map_notIreland = (data[c_name] != "Ireland")
+                data = data[map_notIreland]
+
+        return data, xlims, ylims
+
 
     def plot_scatter(
         self,
         data: pd.DataFrame,
         y_var: str,
         x_var: str,
-        c_name: str,
-        is_numeric_x: bool = True,
+        c_name: [str,None],
         ylims: Union[list[float], None] = None,
         xlims: Union[list[float], None] = None,
         legend: bool = True,
         dir: str = ".",
         interactive = False,
         meta_vars = None,
-        returnPlot = False,
-        returnTrace = False,
-        highlight = None
+        out_type = "trace",
+        highlight = None,
+        y_filterLow = None,
+        y_filterHigh = None,
+        is_errorY = False,
+        cols_errorY = ["Lower", "Upper"],
+        withPoints = True,
+        withLine = False,
+        toDisk = False,
+        overrideColour = None,
+        overrideDashType = None,
+        col_colour = None,
+        useObjectColours = False,
+        colourDictionaryId = None,
     ) -> tuple[list[Scatter], Layout, dict[str, object], dict[str, object],]:
         """
         Plot a simple scatter graph
@@ -875,62 +949,55 @@ class Visualisation:
             Figure object (returnPlot is True), saved to disk as .html \
             (interactive is True AND returnPlot is False) or saved to disk as \
             .png (interactive is True AND returnPlot is False)
+            If x axis values represent years, but is in numeric format, then \
+            the xaxis limits (unless otherwise specified) will automatically be\
+             determined in the same way as the y-axis limits, meaning lower \
+            limit will be 0 (causes an issue when tested on data 2000-2021).
+
+            When plotting, and useObjectColours is True, to define unique colours,
+            a colour dict will be defined, with each unique value in data c_name
+            column being assigned a colour. These colours will be reused when
+            plotting data points matching a label in this dict. To define
+            seperate dictionaries, where one might pass in data filtered for
+            specific values in c_name, and wish to reuse already used colours,
+            but for a different setting (e.g. graphing data disaggregated by
+            ethnicity, and graphing data disaggregated by location), one should
+            define the parameter colourDictionaryId.
         """
-        ylab_text = y_var
+        data, xlims, ylims = self.dataPrep(data,
+                                           y_var,
+                                           x_var,
+                                           c_name,
+                                           y_filterLow, y_filterHigh,
+                                           ylims,
+                                           xlims,)
 
-        data_map = [True if x is not pd.NA else False for x in data[y_var]]
-        data = data.loc[data_map]
+        colourLabelMap, col, dash_type = self.traceFormatPrep(data,
+                                                              c_name,
+                                                              col_colour,
+                                                              useObjectColours,
+                                                              colourDictionaryId,)
 
-        if ylims is None:
-            ylims = self.ylims_def(data[y_var])
-        if is_numeric_x:
-            if xlims is None:
-                xlims = self.ylims_def(data[x_var])
+        dict_xaxis, dict_yaxis, ylims = self.make_dict_axes(ylims, y_var,
+                                             xlims, x_var,)
 
-        upper_limit = [x if x > ylims[1] else pd.NA for x in data[y_var]]
-        data = data.assign(upper_limit=upper_limit)
+        title_text = f"{y_var} trend by {x_var}"
 
-        if "results" not in data.columns:
-            data = data.assign(results=["NotRequired"] * len(data.index))
+        layout = self.get_scatterLayout(dict_yaxis,
+                                        dict_xaxis,
+                                        title_text,)
 
-        dash_type = self.make_dict_dash_type(data)
-
-        try:
-            data[c_name] = pd.to_numeric(data[c_name])
-        except:
-            pass
-        data.sort_values(by=c_name, inplace=True)
-
-        if c_name in self.legends.keys() and self.legends[c_name] is not None:
-            col = self.legends[c_name]
-            #check all levels are in dict
-            #if not, add levels to c_name's colour dictionary
-            levels = []
-            for name_res, group_res in data.groupby("results"):
-                for name_col, group_col in group_res.groupby(c_name):
-                    levels.append(name_col)
-                break
-            stored = set(col.keys())
-            levels = set(levels)
-            check = levels == col
-            if check == False:
-                diff = levels.difference(col)
-                for i, x in enumerate(diff):
-                    col[x] = self.getColours(len(stored)+i)[len(stored)+i]
-                self.legends[c_name] = col
-
-        elif c_name not in self.legends.keys():
-            col = self.make_dict_col(data, c_name)
-            self.legends[c_name] = col
-        else:
-            col = self.make_dict_col(data, c_name)
-
-        if col is None:
-            print(f"Failed for {c_name}")
-            return None, None
-
+        #Plotting
         traces = []
+        #May be better to alter this so that currently stored legend labels in this object are stored as an attr, not just stored at the level of the plotting method. But this will work for now.
+        legendLabels = set()
+
+        if c_name is None:
+            c_name = self.defaultCName
+
         for name_col, group_col in data.groupby(c_name):
+
+            #Determine whether to plot this point
             skip = False
             if name_col not in self.ignore:
                 for x in self.ignore:
@@ -942,9 +1009,230 @@ class Visualisation:
             if skip==True:
                 continue
 
+            #Ensure data is ordered by x_axis
             group_col.sort_values(by=x_var, inplace=True)
 
-            dict_marker = self.make_dict_marker(color=col[name_col])
+            #Assign colour and dash type
+            if col_colour is not None:
+                nameLabel_colour = colourLabelMap[name_col]
+            else:
+                nameLabel_colour = name_col
+
+            #Format marker/line
+            dict_line = self.make_dict_line(color=col[nameLabel_colour],
+                                            dash=dash_type[nameLabel_colour])
+
+            dict_marker, skipOverrideCol = self.highlight_point(nameLabel_colour, highlight, col, highlight_col=name_col)
+
+            if overrideColour is not None and not skipOverrideCol:
+                dict_marker["color"] = overrideColour
+                dict_line["color"] = overrideColour
+            if overrideDashType is not None:
+                dict_line["dash"] = overrideDashType
+
+            #Set labels for interactive
+            if meta_vars is not None:
+                meta_label = group_col[meta_vars].applymap(str)
+                meta_label = meta_label.agg(', '.join, axis=1).tolist()
+            else:
+                meta_label = None
+
+            #Format error bars
+            dict_error_y = self.formatErrorBar(is_errorY,
+                                               group_col,
+                                               cols_errorY,
+                                               dict_line["color"],
+                                               ylims,
+                                               y_var,)
+
+            if colourDictionaryId is not None:
+                legendgroup = colourDictionaryId
+            else:
+                legendgroup = "group"
+
+            #Create traces
+            if withPoints:
+                traces.append(
+                    Scatter(
+                        x=group_col[x_var],
+                        y=group_col[y_var],
+                        mode="markers",
+                        marker=dict_marker,
+                        showlegend=all([legend,
+                                        nameLabel_colour not in legendLabels]),
+                        legendgroup=legendgroup,
+                        name=nameLabel_colour,
+                        hoverinfo="text",
+                        hovertext=meta_label,
+                        error_y=dict_error_y,
+                    )
+                )
+                #Ensure not duplicating error bars if withLine==True
+                dict_error_y = None
+            if withLine:
+                traces.append(
+                    Scatter(
+                        x=group_col[x_var],
+                        y=group_col[y_var],
+                        mode="lines",
+                        marker=dict_marker,
+                        line=dict_line,
+                        #if withPoints is False AND showlegend is True
+                        showlegend=all([not withPoints, legend,
+                                        nameLabel_colour not in legendLabels]),
+                        legendgroup=legendgroup,
+                        name=nameLabel_colour,
+                        error_y=dict_error_y,
+                    )
+                )
+            legendLabels.add(nameLabel_colour)
+
+
+        return self.outPlots(traces, layout,
+                             sub("[[:punct:] ]+", "", title_text),
+                             out_type,
+                             toDisk=toDisk)
+
+    def formatErrorBar(self,
+                       plotError:bool,
+                       dat: pd.Series,
+                       cols_error: list[str],
+                       colour: str,
+                       lims: list[float],
+                       valueCol: str,):
+        #Format error bars
+        if plotError:
+            #Ensure error bar is shown, even if beyond y limit
+            withinBounds_upper = npvectorize(lambda x,y: x if x<=y else y)
+            withinBounds_lower = npvectorize(lambda x,y: x if x>=y else y)
+            error_upper = withinBounds_upper(dat[cols_error[1]], lims[1])
+            error_lower = withinBounds_lower(dat[cols_error[0]], lims[0])
+
+            dict_error_y = self.make_dict_error_y(
+                array=error_upper - dat[valueCol], #Upper
+                arrayminus=dat[valueCol] - error_lower, #Lower
+            )
+
+            dict_error_y["color"] = colour
+        else:
+            dict_error_y = None
+
+        return dict_error_y
+
+
+    def plot_bar(
+        self,
+        data: pd.DataFrame,
+        y_var: str,
+        x_var: str,
+        c_name: [str,None],
+        ylims: Union[list[float], None] = None,
+        xlims: Union[list[float], None] = None,
+        legend: bool = True,
+        dir: str = ".",
+        interactive = False,
+        meta_vars = None,
+        out_type = "trace",
+        highlight = None,
+        y_filterLow = None,
+        y_filterHigh = None,
+        is_errorY = False,
+        cols_errorY = ["Lower", "Upper"],
+        toDisk = False,
+        overrideColour = None,
+        col_colour = None,
+        useObjectColours = False,
+        colourDictionaryId = None,
+    ) -> tuple[list[Scatter], Layout, dict[str, object], dict[str, object],]:
+        """
+        Plot a simple scatter graph
+        Non-automated implementation of plot_incprev()
+
+        Parameters:
+            data (pd.DataFrame):
+            y_var (str):
+            x_var (str):
+            c_name (str):
+            is_numeric_x (bool):
+            ylims (list):
+            xlims (list):
+            legend (bool):
+            dir (str): path to dir to save graphs to disk (if applicable)
+            interactive (bool): Output interactive? If returnTrace==False
+            meta_vars (list): List of column names to show in hover labels\
+                if interactive output
+            returnPlot (bool): Return Figure object? If returnTrace==False
+            returnTrace (bool): Return list of traces or save figure to disk
+
+        Returns:
+            list: List of traces
+                if returnTrace is True
+
+        Notes:
+            returnTrace determines whether a list of traces is returned, or\
+            the final figure. The final figure can be returned as a plotly \
+            Figure object (returnPlot is True), saved to disk as .html \
+            (interactive is True AND returnPlot is False) or saved to disk as \
+            .png (interactive is True AND returnPlot is False)
+            If x axis values represent years, but is in numeric format, then \
+            the xaxis limits (unless otherwise specified) will automatically be\
+             determined in the same way as the y-axis limits, meaning lower \
+            limit will be 0 (causes an issue when tested on data 2000-2021).
+        """
+        data, xlims, ylims = self.dataPrep(data,
+                                           y_var,
+                                           x_var,
+                                           c_name,
+                                           y_filterLow, y_filterHigh,
+                                           ylims,
+                                           xlims,)
+
+        colourLabelMap, col, _ = self.traceFormatPrep(data,
+                                                      c_name,
+                                                      col_colour,
+                                                      useObjectColours,
+                                                      colourDictionaryId,)
+
+        dict_xaxis, dict_yaxis, ylims = self.make_dict_axes(ylims, y_var,
+                                             xlims, x_var,)
+
+        title_text = f"{y_var} trend by {x_var}"
+        layout = self.get_barLayout(dict_yaxis,
+                                    dict_xaxis,
+                                    title_text,)
+
+        #Plotting
+        traces = []
+        #May be better to alter this so that currently stored legend labels in this object are stored as an attr, not just stored at the level of the plotting method. But this will work for now.
+        legendLabels = set()
+
+        if c_name is None:
+            c_name = self.defaultCName
+
+        for name_col, group_col in data.groupby(c_name):
+
+            skip = False
+            if name_col not in self.ignore:
+                for x in self.ignore:
+                    if str(name_col).find(f"'{x}'") != -1:
+                        skip=True
+                        break
+            else:
+                skip=True
+            if skip==True:
+                continue
+
+            #group_col.sort_values(by=x_var, inplace=True)
+
+            if col_colour is not None:
+                nameLabel_colour = colourLabelMap[name_col]
+            else:
+                nameLabel_colour = name_col
+
+            dict_bar = self.make_dict_bar(color=col[nameLabel_colour])
+
+            if overrideColour is not None:
+                dict_bar["color"] = overrideColour
 
             if meta_vars is not None:
                 meta_label = group_col[meta_vars].applymap(str)
@@ -952,54 +1240,87 @@ class Visualisation:
             else:
                 meta_label = None
 
+            dict_error_y = self.formatErrorBar(is_errorY,
+                                               group_col,
+                                               cols_errorY,
+                                               dict_bar["color"],
+                                               ylims,
+                                               y_var,)
+
             traces.append(
-                Scatter(
+                Bar(
                     x=group_col[x_var],
                     y=group_col[y_var],
-                    mode="markers",
-                    marker=dict_marker,
-                    showlegend=legend,
+                    showlegend=all([legend,
+                                    nameLabel_colour not in legendLabels]),
                     legendgroup="group",
-                    name=name_col,
+                    name=nameLabel_colour,
                     hoverinfo="text",
                     hovertext=meta_label,
+                    error_y=dict_error_y,
                 )
             )
+            #Ensure not duplicating error bars if withLine==True
+            legendLabels.add(nameLabel_colour)
 
 
-        dict_xaxis, dict_yaxis = self.make_dict_axes(ylims)
-        dict_xaxis["title_text"] = x_var
-        dict_yaxis["title_text"] = y_var
-        title_text=f"{y_var} trend by {x_var}"
+        return self.outPlots(traces, layout,
+                             sub("[[:punct:] ]+", "", title_text),
+                             out_type,
+                             toDisk=toDisk)
+
+
+
+    def get_scatterLayout(self,
+                          dict_yaxis,
+                          dict_xaxis,
+                          title_text,):
+        title_text = title_text
         layout = Layout(
             title_text=title_text,
-            legend_title_text="Subcategories:",
-            legend_title_font_size=15 * self.sf,
-            legend_font_size=10 * self.sf,
+            legend_title_text=self.dict_lay["legend_title_text"],
+            legend_title_font_size=self.dict_lay["axes_title_font_size"],
+            legend_font_size=self.dict_lay["legend_font_size"],
             legend_valign=self.dict_lay["legend_valign"],
+            legend_x = self.dict_lay["legend_x"],
+            legend_y = self.dict_lay["legend_y"],
+            legend_xanchor = self.dict_lay["legend_xanchor"],
+            legend_yanchor = self.dict_lay["legend_yanchor"],
+            margin=self.dict_lay["margin"],
             scattermode="group",
-            scattergap=0.75,
-            font=self.dict_font,
-            title=self.dict_title,
+            scattergap=self.dict_lay["plot_scattergap"],
+            font=self.make_dict_font(),#self.dict_font,
+            title=self.make_dict_title(),
             xaxis=dict_xaxis,
             yaxis=dict_yaxis,
+            plot_bgcolor=self.dict_lay["plot_bgcolor"],
         )
-        if returnTrace:
-            return traces, layout
-        else:
-            plot = Figure(
-                data = traces,
-                layout = layout
-            )
+        return layout
 
-            label_out = sub("[[:punct:] ]+", "", title_text)
-            if interactive:
-                if returnPlot:
-                    return plot
-                else:
-                    plot.write_html(f"{dir}/{label_out}_plots.html")
-            else:
-                plot.write_image(f"{dir}/{label_out}_plots.pdf", engine="kaleido")
+    def get_barLayout(self,
+                      dict_yaxis,
+                      dict_xaxis,
+                      title_text,):
+        dict_xaxis["ticklabelstep"] = 1
+        title_text = title_text
+        layout = Layout(
+            title_text=title_text,
+            legend_title_text=self.dict_lay["legend_title_text"],
+            legend_title_font_size=self.dict_lay["axes_title_font_size"],
+            legend_font_size=self.dict_lay["legend_font_size"],
+            legend_valign=self.dict_lay["legend_valign"],
+            legend_x = self.dict_lay["legend_x"],
+            legend_y = self.dict_lay["legend_y"],
+            legend_xanchor = self.dict_lay["legend_xanchor"],
+            legend_yanchor = self.dict_lay["legend_yanchor"],
+            margin=self.dict_lay["margin"],
+            font=self.make_dict_font(),#self.dict_font,
+            title=self.make_dict_title(),
+            xaxis=dict_xaxis,
+            yaxis=dict_yaxis,
+            plot_bgcolor=self.dict_lay["plot_bgcolor"],
+        )
+        return layout
 
     def table(
             self,
@@ -1198,192 +1519,6 @@ class Visualisation:
 
         return (plots, layout)
 
-    def autoAnalysis(self, subdirs: bool = False, subdivideLevels: bool = False,
-        inMemory=False, file_inc=None, file_prev=None, yearFilter=None) -> None:
-        """
-        Visualise incPrev data in the current working directory.
-        Produces a .pdf file of graphs for each subgroup and incPrev combination.
-
-        Parameters:
-            subdirs (bool): Is the data organised into dirs of different conditions?
-            subdivideLevels (bool): Should the subgroup levels be split between 2 graphs?
-
-        Usage:
-            autoAnalysis()
-
-        Notes:
-            Filename structure: {Condition}_{SUBGROUP}_*.csv
-        """
-
-        if subdirs == True:
-            dirs = [f.path for f in scandir(getcwd()) if f.is_dir() and not f.name.startswith(".")]
-        else:
-            dirs = ["."]
-
-        if inMemory:
-            dsr_inc = pd.read_csv(file_inc, index_col=[0,1,2,3])
-            dsr_prev = pd.read_csv(file_prev, index_col=[0,1,2,3])
-
-            subcats = set([index[3] for index in dsr_inc.index])
-            dirs = set([index[0] for index in dsr_inc.index])
-
-        for dir in tqdm(dirs):
-            if not inMemory:
-                files_csv = [x for x in listdir(dir) if x[-4:] == ".csv"]
-                subcats = [sub(".*?\\_(.*)(Inc|Prev).*", "\\1", x) for x in files_csv]
-                subcats_map = [True if len(x) == 0 else False for x in subcats]
-                if True in subcats_map:
-                    files_change = list(compress(files_csv, subcats_map))
-                    for file in files_change:
-                        name_new = sub("(.*?\\_).*(Inc|Prev.*$)", "\\1OVERALL_\\2", file)
-                        rename(f"{dir}/{file}", f"{dir}/{name_new}")
-
-                files_csv = [x for x in listdir(dir) if x[-4:] == ".csv"]
-                subcats = [sub(".*?\\_(.*)_(Inc|Prev).*", "\\1", x) for x in files_csv]
-
-            for subcat in subcats:
-                if subcat in self.sepPlots.keys():
-                    n_rows = self.sepPlots[subcat]
-                else:
-                    n_rows = 2
-
-                out_row_n = 1
-                plots = make_subplots(
-                    cols=1, rows=n_rows, vertical_spacing=0.105, subplot_titles=["..."] * n_rows
-                )
-                shapes = []
-
-                if subcat == "OVERALL":
-                    query_str = f"{subcat}"
-
-                    if inMemory:
-                        dat_subcat = self.combine(query_str=query_str,
-                            inMemory=inMemory,
-                            cond=dir,
-                            file_prev=dsr_prev,
-                            file_inc=dsr_inc)
-                    else:
-                        dat_subcat = self.combine(dir, query_str, inMemory, file_prev, file_inc)
-                    #Check both incidence and prevalence data is present
-                    if "Incidence" not in dat_subcat.columns or "Prevalence" not in dat_subcat.columns:
-                        continue
-
-                    if len([x for x in dat_subcat.columns if x == "OVERALL"]) == 0:
-                        dat_subcat = dat_subcat.assign(OVERALL=["overall"] * len(dat_subcat.index))
-
-                    # remove na values in metric col
-                    dat_subcat_map = [
-                        True if pd.notna(x) else False for x in dat_subcat["Prevalence"]
-                    ]
-                    dat_temp = dat_subcat.loc[dat_subcat_map]
-                    p, layout = self.plot_incprev(dat_temp,
-                                                  "Prevalence",
-                                                  legend=True,
-                                                  )
-                    for trace in p:
-                        plots.add_trace(trace, row=out_row_n, col=1)
-                        plots.layout.annotations[out_row_n - 1].update(text="Prevalence")
-                    out_row_n += 1
-                    plots.update_xaxes(layout.xaxis, col=1, row=out_row_n - 1)
-                    plots.update_yaxes(layout.yaxis, col=1, row=out_row_n - 1)
-                    shapes.append(self.make_dict_background(out_row_n - 1))
-
-                    dat_subcat_map = [
-                        True if pd.notna(x) else False for x in dat_subcat["Incidence"]
-                    ]
-                    dat_temp = dat_subcat.loc[dat_subcat_map]
-                    p, layout = self.plot_incprev(dat_temp, "Incidence", legend=False)
-                    for trace in p:
-                        plots.add_trace(trace, row=out_row_n, col=1)
-                        plots.layout.annotations[out_row_n - 1].update(text="Incidence")
-                    out_row_n += 1
-                    plots.update_xaxes(layout.xaxis, col=1, row=out_row_n - 1)
-                    plots.update_yaxes(layout.yaxis, col=1, row=out_row_n - 1)
-                    shapes.append(self.make_dict_background(out_row_n - 1))
-
-                else:
-                    query_str = f"{subcat}"
-                    if inMemory:
-                        dat_subcat = self.combine(query_str=query_str,
-                            inMemory=inMemory,
-                            cond=dir,
-                            dat_prev=dsr_prev,
-                            dat_inc=dsr_inc)
-                    else:
-                        dat_subcat = self.combine(dir, query_str, inMemory, file_prev, file_inc)
-                    #Check both incidence and prevalence data is present
-                    if "Incidence" not in dat_subcat.columns or "Prevalence" not in dat_subcat.columns:
-                        continue
-                    levels_dat = dat_subcat[subcat]
-
-                    if subcat in self.sepPlots.keys():
-                        groupings = self.generateGroups(levels_dat, ceil(len(levels_dat) / self.sepPlots[subcat]))
-                    else:
-                        groupings = self.generateGroups(levels_dat, len(levels_dat))
-
-                    out, layout = self.sequesteredGroups_plot(
-                        dat_subcat,
-                        "Prevalence",
-                        groupings,
-                        subgroups=True,
-                        c_name=subcat,
-                        legend=True,
-                    )
-                    if out is None:
-                        continue
-
-                    for group in out:
-                        for trace in group:
-                            plots.add_trace(trace, row=out_row_n, col=1)
-                            plots.layout.annotations[out_row_n - 1].update(text="Prevalence")
-                        out_row_n += 1
-                    plots.update_xaxes(layout.xaxis, col=1, row=out_row_n - len(out))
-                    plots.update_yaxes(layout.yaxis, col=1, row=out_row_n - len(out))
-                    shapes.append(self.make_dict_background(out_row_n - 1))
-
-                    out, layout = self.sequesteredGroups_plot(
-                        dat_subcat,
-                        "Incidence",
-                        groupings,
-                        subgroups=True,
-                        c_name=subcat,
-                        legend=False,
-                    )
-                    if out is None:
-                        continue
-
-                    for group in out:
-                        for trace in group:
-                            plots.add_trace(trace, row=out_row_n, col=1)
-                            plots.layout.annotations[out_row_n - 1].update(text="Incidence")
-                        out_row_n += 1
-                    plots.update_xaxes(layout.xaxis, col=1, row=out_row_n - len(out))
-                    plots.update_yaxes(layout.yaxis, col=1, row=out_row_n - len(out))
-                    shapes.append(self.make_dict_background(out_row_n - 1))
-
-                plots = self.updateLayout_subplots(plots, layout, out_row_n,
-                        subcat, shapes)
-
-                label_out = sub("[[:punct:]]+", "", subcat)
-                if inMemory: #For the moment, inMemory indicates DSR data
-                    if self.label_map is not None:
-                        dir_lab = self.label_map[dir]
-
-                    if not isdir(f"{dir_lab}/DsrPlots"):
-                        mkdir(f"{dir_lab}/DsrPlots")
-
-                    if self.to_json:
-                        plots.write_json(f"{dir_lab}/DsrPlots/{dir_lab}_{label_out}_DSR_plots.json")
-                    else:
-                        plots.write_image(f"{dir_lab}/DsrPlots/{dir_lab}_{label_out}_DSR_plots.pdf", engine="kaleido")
-                else:
-                    if not isdir(f"{dir}/CrudePlots"):
-                        mkdir(f"{dir}/CrudePlots")
-
-                    if self.to_json:
-                        plots.write_json(f"{dir}/CrudePlots/{label_out}_plots.json")
-                    else:
-                        plots.write_image(f"{dir}/CrudePlots/{label_out}_plots.pdf", engine="kaleido")
 
     def summaryAnalysis(self, inMemory=False, file_prev=None, file_inc=None) -> None:
         """
@@ -1478,24 +1613,25 @@ class Visualisation:
                     "UpperCI":"Upper"})
 
         else:
-            files_to_read = list({f"{subDir}/{x}" for x in listdir(f"{subDir}/") if x[-4:] == ".csv"})
+            files_to_read = list({f"{subDir}{x}" for x in listdir(f"{subDir}/") if x[-4:] == ".csv"})
             if query_str is not None:
                 def grepl_query(files, query_str):
-                    return list(compress(files, [bool(search(f"_{query_str}(_Inc|_Prev)", x)) for x in files]))
+                    return list(compress(files, [bool(search(f"{query_str}(_Inc|_Prev)", x)) for x in files]))
 
                 files_to_read = grepl_query(files_to_read, query_str)
 
-            fileName = sub(".*?\\_(.*)\\_.*", "\\1", files_to_read[0])
-            sub_name = f"{subDir}_{fileName}"
+
+            #fileName = sub(".*?\\_(.*)\\_.*", "\\1", files_to_read[0])
+            #sub_name = f"{subDir}_{fileName}"
             df_inter = pd.read_csv(files_to_read[0])
 
-            df_inter = df_inter.assign(results=[sub_name] * len(df_inter.index))
+            #df_inter = df_inter.assign(results=[sub_name] * len(df_inter.index))
             start_loop = True
 
             i = 1
             for file in files_to_read[i : len(files_to_read)]:
-                fileName = sub(".*?\\_(.*)\\_.*", "\\1", files_to_read[i])
-                sub_name = f"{subDir}_{fileName}"
+                #fileName = sub(".*?\\_(.*)\\_.*", "\\1", files_to_read[i])
+                #sub_name = f"{subDir}_{fileName}"
 
                 df = pd.read_csv(file)
 
@@ -1503,16 +1639,15 @@ class Visualisation:
                 for col in new_cols:
                     df_inter = df_inter.assign(**{f"{col}": pd.NA * len(df_inter.index)})
 
-                df_inter = pd.concat([df.assign(results=[sub_name] * len(df.index)), df_inter],
+                df_inter = pd.concat([df, df_inter],
                         ignore_index=True)
 
                 i += 1
 
-
         df_inter = self.rm_NumNull(df_inter)
         df_inter["Year"] = pd.to_datetime(df_inter["Year"])
 
-        df_inter = self.check_cname(df_inter, query_str)
+        #df_inter = self.check_cname(df_inter, query_str)
 
         return df_inter
 

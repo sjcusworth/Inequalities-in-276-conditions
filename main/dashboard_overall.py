@@ -12,17 +12,38 @@ import yaml
 from tableone import TableOne
 from pikepdf import Pdf
 
+
+"""
+To do:
+    filename: just condition
+    sort imd properly in legend
+    File structure:
+        Condition -
+            standardised.csv crude.csv pdfs
+    crude.csv -
+        Overall, ethnicity, imd, age and sex (filter only for these)
+"""
+
 with open("wdir.yml",
           "r",
           encoding="utf8") as file_config:
     config = yaml.safe_load(file_config)
 
+if not os.path.isdir(f"{config['PATH']}{config['dir_out']}crude"):
+    os.mkdir(f"{config['PATH']}{config['dir_out']}crude")
+if not os.path.isdir(f"{config['PATH']}{config['dir_out']}dsr"):
+    os.mkdir(f"{config['PATH']}{config['dir_out']}dsr")
+
+dataSelect = ["crude", "dsr",]
+DATA = dataSelect[0]
+
 PATH = config["PATH"]
 DIR_MAIN = f"{PATH}{config['dir_main']}"
-DIR_OUT = f"{PATH}{config['dir_out']}"
+DIR_OUT = f"{PATH}{config['dir_out']}{DATA}/"
 DIR_DATA = DIR_OUT
-FILE_PREV = f"{DIR_OUT}prev_DSR.csv"
-FILE_INC = f"{DIR_OUT}inc_DSR.csv"
+
+if not os.path.isdir(f"{DIR_OUT}Summaries"):
+    os.mkdir(f"{DIR_OUT}Summaries")
 
 #sys.path.append(f"{DIR_MAIN}/ANALOGY_SCIENTIFIC/analogy/study_design/incidence_prevalence/")
 import AnalogyGraphing as ag
@@ -68,7 +89,7 @@ PAGES_CONFIG = dict(
 
 #####################################################################
 
-def read_dat(path_dat,
+def read_dat_dsr(path_dat,
              yearFilter_low=2006,):
 
     schema = {
@@ -113,6 +134,13 @@ def read_dat(path_dat,
                     pl.col("Year") >= yearFilter_low
                     )
                 .filter(
+                    pl.col("Group").is_in([
+                        "Deprivation",
+                        "Ethnicity",
+                        "Overall",
+                        ])
+                    )
+                .filter(
                     pl.col(metric).is_not_null()
                     )
                 .rename(
@@ -128,7 +156,90 @@ def read_dat(path_dat,
                     pl.col("Subgroup").str.replace_all("'", "")
                     )
                 .filter(
-                    pl.col("Subgroup") != "Ireland"
+                    pl.col("Subgroup") != "MissingImd"
+                    )
+                )
+
+        return dat_
+
+    dat_inc = formatDat(dat, incCols, yearFilter_low, "inc")
+    dat_prev = formatDat(dat, prevCols, yearFilter_low, "prev")
+
+    return dat_inc, dat_prev
+
+
+def read_dat_crude(path_dat,
+             yearFilter_low=2006,):
+
+    schema = {
+            "Condition": pl.Utf8,
+            "Subgroup": pl.Utf8,
+            "Year": pl.Int64,
+            "Group": pl.Utf8,
+            "Denominator_inc": pl.Float64,
+            "Numerator_inc": pl.Float64,#pl.Int64,
+            "Incidence": pl.Float64,
+            "LowerCI_inc": pl.Float64,
+            "UpperCI_inc": pl.Float64,
+            "Denominator_prev": pl.Int64,
+            "Numerator_prev": pl.Float64,#pl.Int64,
+            "Prevalence": pl.Float64,
+            "LowerCI_prev": pl.Float64,
+            "UpperCI_prev": pl.Float64,
+            }
+
+    commonCols = tuple(["Condition",
+                        "Subgroup",
+                        "Year",
+                        "Group",])
+    incCols = commonCols + tuple(["Incidence",
+                                  "LowerCI_inc",
+                                  "UpperCI_inc",])
+    prevCols = commonCols + tuple(["Prevalence",
+                                  "LowerCI_prev",
+                                  "UpperCI_prev",])
+
+    dat = pl.read_csv(path_dat, schema=schema,)
+
+    def formatDat(dat,
+                  cols,
+                  yearFilter_low,
+                  suff):
+        if suff=="inc":
+            metric = "Incidence"
+        elif suff=="prev":
+            metric = "Prevalence"
+
+        dat_ = (
+                dat
+                .select(pl.col(cols))
+                .filter(
+                    pl.col("Year") >= yearFilter_low
+                    )
+                .filter(
+                    pl.col("Group").is_in([
+                        "IMD_pracid",
+                        "ETHNICITY",
+                        "OVERALL",
+                        ])
+                    )
+                .filter(
+                    pl.col(metric).is_not_null()
+                    )
+                .rename(
+                    {f"UpperCI_{suff}":"UpperCI", f"LowerCI_{suff}":"LowerCI",}
+                    )
+                .with_columns(
+                    pl.col("Year").cast(pl.Utf8)
+                    )
+                .with_columns(
+                    pl.col("Year").str.strptime(pl.Datetime, "%Y")
+                    )
+                .with_columns(
+                    pl.col("Subgroup").str.replace_all("'", "")
+                    )
+                .filter(
+                    pl.col("Subgroup") != "MissingImd"
                     )
                 )
 
@@ -140,7 +251,16 @@ def read_dat(path_dat,
     return dat_inc, dat_prev
 
 #####################################################################
-dat_inc, dat_prev = read_dat("out/Publish/DSR.csv")
+if DATA == "crude":
+    dat_inc, dat_prev = read_dat_crude("out/Publish/crude.csv")
+else:
+    dat_inc, dat_prev = read_dat_dsr("out/Publish/DSR.csv")
+
+dict_varsPlot = {
+        "ethnicity": {"crude": "ETHNICITY", "dsr": "Ethnicity",},
+        "deprivation": {"crude": "IMD_pracid", "dsr": "Deprivation",},
+        "overall": {"crude": "OVERALL", "dsr": "Overall",},
+        }
 
 labels = tuple(dat_inc.get_column("Condition").unique().to_list())
 
@@ -220,7 +340,7 @@ for i_label, label in enumerate(labels):
         f.dict_lay["axes_tickfont_size"] = 24
         f.dict_lay["background_opacity"] = 0
         f.dict_lay["background_fillcolor"] = "white"
-        f.dict_lay["font_family"] = "SF Pro Text"
+        f.dict_lay["font_family"] = 'Helvetica, sans-serif'
         f.dict_lay["table_columnwidth"] = [1, 6]
         f.colours = [
                 "#5778a4",
@@ -267,7 +387,7 @@ for i_label, label in enumerate(labels):
             dat_ = (
                     dat_prev
                     .filter(pl.col("Condition")==label)
-                    .filter(pl.col("Group") == "Overall")
+                    .filter(pl.col("Group") == dict_varsPlot["overall"][DATA])
                     )
 
 
@@ -309,7 +429,7 @@ for i_label, label in enumerate(labels):
             dat_ = (
                     dat_inc
                     .filter(pl.col("Condition")==label)
-                    .filter(pl.col("Group") == "Overall")
+                    .filter(pl.col("Group") == dict_varsPlot["overall"][DATA])
                     )
 
             traces, layout = f.plot_scatter(dat_.to_pandas(),
@@ -358,7 +478,7 @@ for i_label, label in enumerate(labels):
             dat_table_ = (
                     dat_table_
                     .filter(
-                        pl.col("Group") == "Overall"
+                        pl.col("Group") == dict_varsPlot["overall"][DATA],
                         )
                     .with_columns(
                         pl.col(["Incidence",
@@ -379,8 +499,8 @@ for i_label, label in enumerate(labels):
                             ).alias("Prevalence_")
                         )
                     .with_columns(
-                        pl.col("Incidence_").apply(lambda x: f"{x[0]} ({x[1]}, {x[2]})"),
-                        pl.col("Prevalence_").apply(lambda x: f"{x[0]} ({x[1]}, {x[2]})"),
+                        pl.col("Incidence_").map_elements(lambda x: f"{x[0]} ({x[1]}, {x[2]})"),
+                        pl.col("Prevalence_").map_elements(lambda x: f"{x[0]} ({x[1]}, {x[2]})"),
                         )
                     )
 
@@ -436,7 +556,7 @@ for i_label, label in enumerate(labels):
             dat_ = (
                     dat_prev
                     .filter(pl.col("Condition")==label)
-                    .filter(pl.col("Group") == "Ethnicity")
+                    .filter(pl.col("Group") == dict_varsPlot["ethnicity"][DATA])
                     )
 
             if dat_.get_column(metric).max() is None or dat_.get_column(metric).max() < 1:
@@ -484,7 +604,7 @@ for i_label, label in enumerate(labels):
             dat_ = (
                     dat_inc
                     .filter(pl.col("Condition")==label)
-                    .filter(pl.col("Group") == "Ethnicity")
+                    .filter(pl.col("Group") == dict_varsPlot["ethnicity"][DATA])
                     )
 
             if dat_.get_column(metric).max() is None or dat_.get_column(metric).max() < 1:
@@ -535,7 +655,7 @@ for i_label, label in enumerate(labels):
             dat_ = (
                     dat_prev
                     .filter(pl.col("Condition")==label)
-                    .filter(pl.col("Group") == "Deprivation")
+                    .filter(pl.col("Group") == dict_varsPlot["deprivation"][DATA])
                     )
 
             if dat_.get_column(metric).max() is None or dat_.get_column(metric).max() < 1:
@@ -583,7 +703,7 @@ for i_label, label in enumerate(labels):
             dat_ = (
                     dat_inc
                     .filter(pl.col("Condition")==label)
-                    .filter(pl.col("Group") == "Deprivation")
+                    .filter(pl.col("Group") == dict_varsPlot["deprivation"][DATA])
                     )
 
             if dat_.get_column(metric).max() is None or dat_.get_column(metric).max() < 1:
@@ -682,9 +802,9 @@ for i_label, label in enumerate(labels):
             out.pages.append(to_merge.pages[0])
         os.remove(file_name)
 
-    outFile_ = f"{DIR_OUT}/{label}_overall_summary_{i_label}.pdf"
-    files_out_label.append(f"{DIR_OUT}/{label}_overall_summary_{i_label}.pdf")
-    out.save(f"{DIR_OUT}/{label}_overall_summary_{i_label}.pdf")
+    outFile_ = f"{DIR_OUT}/{label}.pdf"
+    files_out_label.append(f"{DIR_OUT}/{label}.pdf")
+    out.save(f"{DIR_OUT}/{label}.pdf")
     out.close()
 
     print(f"Completed {label}")
@@ -695,7 +815,7 @@ for file_name in files_out_label:
     with Pdf.open(file_name) as to_merge:
         out.pages.append(to_merge.pages[0])
         out.pages.append(to_merge.pages[1])
-    os.remove(file_name)
+    #os.remove(file_name)
 
 out.save(f"{DIR_OUT}Summaries/Overall_summary.pdf")
 out.close()
@@ -738,6 +858,9 @@ def add_footer_to_pdf(input_file, footer_text):
 
 add_footer_to_pdf(f"{DIR_OUT}Summaries/Overall_summary.pdf",
                   "doi:")
+for file_name in files_out_label:
+    add_footer_to_pdf(file_name,
+                      "doi:")
 
 print(f"Completed script")
 
