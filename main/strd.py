@@ -47,9 +47,9 @@ condition_labels = pd_read_excel(
     f'{DIR_DATA}aurumGoldLabels_NCQOF.xlsx',
     header=3).dropna(subset=['Joht Labelling'])
 
-GOLD_labels = condition_labels['GOLD']
-JOHT_labels = condition_labels['Joht Labelling']
-map_condLabel = dict(zip(GOLD_labels, JOHT_labels))
+#GOLD_labels = condition_labels['GOLD']
+#JOHT_labels = condition_labels['Joht Labelling']
+#map_condLabel = dict(zip(GOLD_labels, JOHT_labels))
 
 standardised_data_root = 'Standardised Results 10-05'
 
@@ -100,7 +100,7 @@ def fmt_data(df):
     return df
 
 incprev = StrdIncPrev(data_root,
-            map_condLabel,
+            #map_condLabel,
             STUDY_END_DATE,
             STUDY_START_DATE,
             FILENAME=f"{DIR_DATA}dat_processed.parquet",

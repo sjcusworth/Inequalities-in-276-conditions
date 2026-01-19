@@ -15,15 +15,15 @@ with open("wdir.yml",
 directory = f"{config['PATH']}{config['dir_out']}"
 
 
-condition_labels = pd.read_excel(
-    f'{config["PATH"]}{config["dir_data"]}aurumGoldLabels_NCQOF.xlsx',
-    header=3).dropna(subset=['Joht Labelling']) #condition labels file should also be available
+condition_labels = pd.read_csv(
+    f'{config["PATH"]}{config["dir_data"]281 Phenome Labels and Descriptions.csv}',
+    ).dropna(subset=['Joht Labelling']) #condition labels file should also be available
 
 os.chdir(directory)
 data_root = "./"
 
-missing_files = ['CPRDNHL4']
-condition_labels = condition_labels[~condition_labels['GOLD'].isin(missing_files)] #remove missing codes
+#missing_files = ['CPRDNHL4']
+#condition_labels = condition_labels[~condition_labels['GOLD'].isin(missing_files)] #remove missing codes
 
 #GOLD_labels = condition_labels['GOLD'] #not needed here
 JOHT_labels = condition_labels['Joht Labelling'] #instead of running through all unique conditions, analysis will run through JOHT labelled conditions, throwing up errors for missing values

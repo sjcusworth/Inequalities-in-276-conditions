@@ -99,26 +99,26 @@ toAdd_inc = pl.concat(toAdd_inc)
 toAdd_prev = pl.concat(toAdd_prev)
 
 ## Tidy condition names
-condition_labels = pd_read_excel(
-    f'data/aurumGoldLabels_NCQOF.xlsx',
-    header=3).dropna(subset=['Joht Labelling'])
-
-GOLD_labels = condition_labels['GOLD']
-JOHT_labels = condition_labels['Joht Labelling']
-map_condLabel = dict(zip(GOLD_labels, JOHT_labels))
-
-toAdd_inc = (
-        toAdd_inc
-        .with_columns(
-            pl.col("Condition").map_dict(map_condLabel)
-            )
-        )
-toAdd_prev = (
-        toAdd_prev
-        .with_columns(
-            pl.col("Condition").map_dict(map_condLabel)
-            )
-        )
+#condition_labels = pd_read_excel(
+#    f'data/aurumGoldLabels_NCQOF.xlsx',
+#    header=3).dropna(subset=['Joht Labelling'])
+#
+#GOLD_labels = condition_labels['GOLD']
+#JOHT_labels = condition_labels['Joht Labelling']
+#map_condLabel = dict(zip(GOLD_labels, JOHT_labels))
+#
+#toAdd_inc = (
+#        toAdd_inc
+#        .with_columns(
+#            pl.col("Condition").map_dict(map_condLabel)
+#            )
+#        )
+#toAdd_prev = (
+#        toAdd_prev
+#        .with_columns(
+#            pl.col("Condition").map_dict(map_condLabel)
+#            )
+#        )
 
 toAdd_inc.write_csv(output_file_inc)
 toAdd_prev.write_csv(output_file_prev)
