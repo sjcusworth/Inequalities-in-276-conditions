@@ -196,8 +196,21 @@ dat_geo = pl.read_csv("out/Publish/Average_Geometric/281 conditions chi2 z-score
 
 dat_geo = (
         dat_geo
+        .with_columns(
+            pl.col("Date").str.slice(offset=0, length=4)
+            )
+        )
+
+dat_geo = (
+        dat_geo
         .join(
-            dat_crude_inc.rename({"Subgroup": "Group", "Year": "Date",}),
+            (
+                dat_crude_inc
+                .rename({"Subgroup": "Group", "Year": "Date",})
+                .with_columns(
+                    pl.col("Date").str.slice(offset=0, length=4)
+                    )
+                ),
             on=["Group", "Date", "Condition"],
             how="left",
             )
@@ -206,7 +219,13 @@ dat_geo = (
 dat_geo = (
         dat_geo
         .join(
-            dat_crude_prev.rename({"Subgroup": "Group", "Year": "Date",}),
+            (
+                dat_crude_prev
+                .rename({"Subgroup": "Group", "Year": "Date",})
+                .with_columns(
+                    pl.col("Date").str.slice(offset=0, length=4)
+                    )
+                ),
             on=["Group", "Date", "Condition"],
             how="left",
             )
@@ -293,6 +312,6 @@ pl.read_csv("out/Publish/prev_DSR.csv", infer_schema_length=0).select(pl.all().e
 smallCountsCens("out/Publish/prev_crude.csv", ["Numerator"], metric=["Prevalence"])
 smallCountsCens("out/Publish/inc_crude.csv", ["Numerator"], metric=["Incidence"])
 
-smallCountsCens("out/Publish/Average_Geometric/281 conditions chi2 z-scores, expected and observed rates.csv", ["Numerator_prev"], metric=["Prevalence", "Prevalence Ratio"], upperCI=None, lowerCI=None,)
-smallCountsCens("out/Publish/Average_Geometric/281 conditions chi2 z-scores, expected and observed rates.csv", ["Numerator_inc"], metric=["Incidence", "Incidence Ratio"], upperCI=None, lowerCI=None,)
-#pl.read_csv("out/Publish/Average_Geometric/281 conditions chi2 z-scores, expected and observed rates.csv", infer_schema_length=0).select(pl.all().exclude(["Numerator_prev", "Numerator_inc"])).write_csv("out/Publish/Average_Geometric/281 conditions chi2 z-scores, expected and observed rates.csv")
+smallCountsCens("out/Publish/Average_Geometric/281 conditions chi2 z-scores, expected and observed rates.csv", ["Numerator_prev"], metric=["Prevalence", "Prevalence Ratio", "Expected Prevalence", "Prevalence Z-Score",], upperCI=None, lowerCI=None,)
+smallCountsCens("out/Publish/Average_Geometric/281 conditions chi2 z-scores, expected and observed rates.csv", ["Numerator_inc"], metric=["Incidence", "Incidence Ratio", "Expected Incidence", "Incidence Z-Score",], upperCI=None, lowerCI=None,)
+pl.read_csv("out/Publish/Average_Geometric/281 conditions chi2 z-scores, expected and observed rates.csv", infer_schema_length=0).select(pl.all().exclude(["Numerator_prev", "Numerator_inc"])).write_csv("out/Publish/Average_Geometric/281 conditions chi2 z-scores, expected and observed rates.csv")
