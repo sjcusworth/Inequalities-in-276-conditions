@@ -20,6 +20,7 @@ def rmDup(
         matching_cols:bool=True,
         low_memory:bool=True,
         wdir = "./",
+        logger = None,
         ):
     """
     Link datasets A and B by PracticeID
@@ -186,21 +187,10 @@ def rmDup(
     del AExclude_map
     gc.collect()
 
-    if low_memory:
-        del B_raw
-        gc.collect()
-        print("Saving A dedup for joining to B (low memory mode)")
-        print(f"Run in shell: export IFS=","; join -t, -1 N -2 N -a 1 -a 2 <(sort -k N {B_name}) <(sort -k N Dedup_{A_name}.csv) > linked_rmAurumPracs.csv")
-        print("(Where N is column index of a unique identifier (PATIENT_ID))")
-        A_deDup.collect(streaming=True).write_csv(f"{wdir}Dedup_{A_name}.csv")
-    else:
+    if logger is None:
         print("Saving combined data")
-        if matching_cols is True:
-            combo_raw = concat([A_deDup, B_raw],
-                how="vertical", parallel=low_memory)
-        else:
-            combo_raw = concat([A_deDup, B_raw],
-                how="diagonal", parallel=low_memory)
+    else:
+        logger.info("Saving combined data")
 
         combo_raw.collect().write_csv(f"{wdir}LINKED_{A_name}_{B_name}.csv")
 
@@ -216,8 +206,7 @@ def process_ethImd(
     row_group_size=None,
     low_memory=False,
     is_parquet=True,
-    calcEth=False,
-    toParquet=True,
+    logger=None,
     ):
     """
 
@@ -307,7 +296,10 @@ def process_ethImd(
         elif imd_type == "IMD_pracid":
             lab_col = "PRACTICE_ID"
         else:
-            print("IMD script not working")
+            if logger is None:
+                print("IMD script not working")
+            else:
+                logger.warning("IMD script not working")
             break
 
         map_imd = imd_dict[imd_type]
