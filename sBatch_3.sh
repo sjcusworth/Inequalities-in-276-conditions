@@ -39,4 +39,6 @@ echo "format started"
 python3 main/formatPublish.py
 echo "format complete"
 
-main/tidyImdCategories.py
+echo "tidyImdCategories started"
+python3 main/tidyImdCategories.py
+echo "tidyImdCategories finished"
