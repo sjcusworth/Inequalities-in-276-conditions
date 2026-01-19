@@ -26,7 +26,7 @@ for i in cats:
 
 mask_start = pd.to_datetime(df['START_DATE']) < pd.Timestamp('2019-01-01')
 mask_end = pd.to_datetime(df['EXIT_DATE']) > pd.Timestamp('2020-01-01')
-age2019 = 2019 - df.YEAR_OF_BIRTH.str[:4].astype(int) 
+age2019 = 2019 - df.YEAR_OF_BIRTH.str[:4].astype(int)
 
 df['Age2019'] = pd.cut(age2019,[0,16,30,40,50,60,70,80,115],
                        labels= ['0-16', '17-30', '31-40', '41-50', '51-60', '61-70', '71-80', '81+'])
@@ -45,10 +45,10 @@ table2019['AGE_CATEGORY'] = table2019.pop('Age2019')
 for dfx in table1, table2019:
     dfx['SEX'] = dfx['SEX'].loc[['F','M','I']]
     dfx['SEX'].index = ['Female','Male','Intersex']
-    
+
     dfx['ETHNICITY'] = dfx['ETHNICITY'].sort_index()
     dfx['HEALTH_AUTH'] = dfx['HEALTH_AUTH'].sort_index()
-    
+
     dfx['IMD_pracid'] = dfx['IMD_pracid'].loc[['1', '2', '3', '4', '5', '6', '7', '8', '9', '10', 'Ireland']]
     dfx['IMD_pracid'].index = ['1', '2', '3', '4', '5', '6', '7', '8', '9', '10', 'Ireland (No IMD available)']
 
@@ -81,5 +81,5 @@ df_bc = df_bc.set_index(['Category','Subgroup'])
 
 df_bc = df_bc.reset_index()
 df_bc.index = df_bc.index + 1  # shifting index
-df_bc.sort_index(inplace=True) 
+df_bc.sort_index(inplace=True)
 df_bc.to_csv('out/Publish/tableOne.csv')
