@@ -676,8 +676,7 @@ incprev:
   is_parquet: !!bool True
   fileType: !!str "parquet"
 
-  # readType only relevant when usePolars is True
-  usePolars: !!bool False
+  usePolars: !!bool True
 
   batch_size: !!int 50 # how many conditions to process in each paralel process
   INCREMENT_BY_MONTH: !!int 12

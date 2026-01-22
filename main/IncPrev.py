@@ -7,6 +7,7 @@ import polars as pl
 import pyarrow.dataset as ds
 import yaml
 import argparse
+from dateutil.relativedelta import relativedelta
 #import pip
 
 #if hasattr(pip, 'main'):
@@ -109,6 +110,8 @@ def processBatch(batch,
 
     if usePolars:
         #Polars
+        print("running polars incprev")
+        #Incidence
         dat_incprev = plIncPrev(STUDY_END_DATE[0], #currently this is the value for start/end_date_inc
                                 STUDY_START_DATE[0],
                                 FILENAME,
@@ -129,13 +132,32 @@ def processBatch(batch,
                         .alias("ETHNICITY")
                     )
             )
-        results = dat_incprev.runAnalysis()
-        for result_ in results:
-            if "Prevalence" in result_.columns:
-                metric = "prev"
-            else:
-                metric = "inc"
-            result_.write_csv(f"{DIR_OUT}out_{metric}_{batchId}.csv")
+
+        results = dat_incprev.calculate_overall_inc_prev(is_incidence=True)
+        if conf_incprev["calc_grouped"]:
+            results = pl.concat(tuple([
+                results,
+                dat_incprev.calculate_grouped_inc_prev(is_incidence=True)
+                ]),
+                                    how="vertical",
+                                    )
+        results.write_csv(f"{DIR_OUT}out_inc_{batchId}.csv")
+        del results
+
+        #Prevalence
+        dat_incprev.STUDY_START_DATE = STUDY_START_DATE[1]
+        dat_incprev.STUDY_END_DATE = STUDY_END_DATE[1] + relativedelta(years=0, months=0, days=1)
+
+        results = dat_incprev.calculate_overall_inc_prev(is_incidence=False)
+        if conf_incprev["calc_grouped"]:
+            results = pl.concat(tuple([
+                results,
+                dat_incprev.calculate_grouped_inc_prev(is_incidence=False)
+                ]),
+                                    how="vertical",
+                                    )
+        results.write_csv(f"{DIR_OUT}out_prev_{batchId}.csv")
+        del results
 
     else:
         #Pandas

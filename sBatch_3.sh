@@ -23,6 +23,27 @@ module load plotly.py/5.12.0-GCCcore-11.3.0;
 module load openpyxl/3.0.10-GCCcore-11.3.0;
 echo "Modules Loaded";
 
+# init out/Publish
+rm -r out/Publish
+mkdir out/Publish
+# get combined crude inc/prev files
+for metric in "inc" "prev";
+do
+    files_combo=( $(ls out | grep out_${metric}_) );
+    file_out=out/out_${metric}.csv;
+
+    for i in ${!files_combo[@]};
+    do
+        # if 1st file to write, include header
+        if (( i -e 0 ));
+        then
+            cat out/${files_combo[$i]} > $file_out;
+        else # remove header
+            tail -n +2 out/${files_combo[$i]} >> $file_out;
+        fi;
+    done;
+done;
+
 echo "Standardising started"
 python3 main/strd.py
 echo "Standardising complete"
@@ -30,6 +51,13 @@ echo "Standardising complete"
 echo "ratioZscore started"
 python3 main/ratioZscore.py
 echo "Finished ratioZscore"
+
+# init out/Publish
+rm -r out/Publish
+mkdir out/Publish
+# NOTE: these are not publishable until after smallNumCens.py
+cp out/out_inc.csv out/Publish/inc_crude.csv
+cp out/out_prev.csv out/Publish/prev_crude.csv
 
 echo "Censor small numbers started"
 python3 main/smallNumCens.py

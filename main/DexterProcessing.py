@@ -272,7 +272,7 @@ def process_imd(
         q1 = (
             q1
             .with_columns(
-                col(lab_col).map_dict(map_imd).alias(imd_type)
+                col(lab_col).replace(map_imd).alias(imd_type)
                 )
             )
     q1 = (
