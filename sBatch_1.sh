@@ -22,6 +22,10 @@ module load plotly.py/5.24.1-GCCcore-13.3.0
 
 echo "Modules Loaded";
 
+echo "Combining IMD map files"
+python3 main/mergeImdMaps.py
+echo "Combining IMD map files completed"
+
 echo "Preprocessing started"
 python3 main/preprocessing.py
 echo "Preprocessing complete"

@@ -20,7 +20,7 @@ processing:
   #if linking Gold/Aurum, set filename above to null
   #removing duplicates from Gold
   filename_gold: !!str "IncPrev281_GoldJan2024v6_fullDB20240612050700.csv"
-  filename_aurum: !!str "incPrev281Conditions_Aurumv1draft20251219035947.csv" # 
+  filename_aurum: !!str "incPrev281Conditions_Aurumv1draft20251219035947.csv"
   map_file_AtoB: !!str "VisionToEmisMigrators.txt"
   map_delim_AtoB: !!str "\t"
 
@@ -316,7 +316,7 @@ processing:
   combineLevels: null
   
   link_imd: !!bool True
-  imd_map_file: !!str ".csv"
+  imd_map_file: !!str "imd_map.csv"
 
 incprev:
   filename: !!str "dat_processed.parquet"
