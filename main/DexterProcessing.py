@@ -430,3 +430,82 @@ def par_to_csv(file_noExtension):
     for batch in dataset.to_batches():
         writer.write_batch(batch)
     print("Finished")
+
+
+# Core patient/cohort columns required by IncPrevMethods for every batch job.
+CORE_COLS = [
+    'PRACTICE_PATIENT_ID', 'PRACTICE_ID', 'INDEX_DATE', 'START_DATE',
+    'END_DATE', 'COLLECTION_DATE', 'TRANSFER_DATE', 'DEATH_DATE',
+    'REGISTRATION_STATUS',
+]
+
+
+def create_batch_files(
+    path_dir: str,
+    processed_filename: str,
+    bd_list: dict,
+    demography: list,
+    core_cols: list = None,
+):
+    """
+    Write one column-subset Parquet file per SLURM array job using Polars
+    streaming (sink_parquet), so the full processed dataset is never loaded
+    into memory.
+
+    Each output file (dat_batch_{ID}.parquet) contains only:
+      - core cohort columns (INDEX_DATE, END_DATE, etc.)
+      - demographic columns derived from the DEMOGRAPHY config list
+      - the BD_ event-date columns for that specific batch
+
+    This reduces per-job memory from reading ~295 columns to ~25 columns,
+    making it feasible to run IncPrev.py on datasets that would otherwise
+    exceed available RAM.
+
+    Parameters
+    ----------
+    path_dir : str
+        Directory containing processed_filename; batch files are written here.
+    processed_filename : str
+        Filename of the fully-processed parquet (e.g. "dat_processed.parquet").
+    bd_list : dict
+        Mapping of batch ID (str) -> list of BD_ column names, from wdir.yml.
+    demography : list
+        DEMOGRAPHY config value (list of strings and/or lists of strings).
+    core_cols : list, optional
+        Core cohort columns included in every batch file. Defaults to CORE_COLS.
+    """
+    import polars as pl
+
+    if core_cols is None:
+        core_cols = CORE_COLS
+
+    # Flatten nested DEMOGRAPHY list to unique leaf-level column names.
+    demo_cols = list({
+        item
+        for entry in demography
+        for item in (entry if isinstance(entry, list) else [entry])
+    })
+
+    in_path = f"{path_dir}{processed_filename}"
+
+    # Read schema only (no data rows) to validate available columns.
+    available = set(pl.scan_parquet(in_path).columns)
+
+    for batch_id, batch_bd_cols in bd_list.items():
+        wanted = core_cols + demo_cols + list(batch_bd_cols)
+        keep = [c for c in wanted if c in available]
+        missing = [c for c in wanted if c not in available]
+        if missing:
+            print(f"Warning: batch {batch_id} — columns absent from parquet "
+                  f"(skipped): {missing}")
+
+        out_path = f"{path_dir}dat_batch_{batch_id}.parquet"
+        (
+            pl.scan_parquet(in_path, low_memory=True)
+            .select(keep)
+            .sink_parquet(out_path)
+        )
+        print(f"Batch {batch_id}: {len(keep)} columns → {out_path}")
+        gc.collect()
+
+    print("All batch files written.")

@@ -1,5 +1,6 @@
 import datetime
 import sys
+import os
 import csv
 import multiprocessing as mp
 from itertools import repeat
@@ -37,7 +38,18 @@ from IncPrevMethods import IncPrev as pdIncPrev
 from IncPrevMethods_polars import IncPrev as plIncPrev
 
 conf_incprev = config["incprev"]
-FILENAME = f"{DIR_DATA}{conf_incprev['filename']}"
+
+# Prefer a per-batch column-subset file (written by preprocessing.py when
+# create_batch_files: true).  Falls back to the full processed parquet if the
+# batch file does not exist, preserving backwards compatibility.
+_batch_file = f"{DIR_DATA}dat_batch_{ID}.parquet"
+_full_file   = f"{DIR_DATA}{conf_incprev['filename']}"
+if os.path.exists(_batch_file):
+    FILENAME = _batch_file
+    print(f"Using per-batch file: {_batch_file}")
+else:
+    FILENAME = _full_file
+    print(f"Per-batch file not found; using full file: {_full_file}")
 
 STUDY_START_DATE_inc = datetime.datetime(year=conf_incprev["start_date"]["inc"]["year"],
                                      month=conf_incprev["start_date"]["inc"]["month"],
@@ -140,43 +152,76 @@ def processBatch(batch,
     else:
         #Pandas
         print("running pandas incprev")
-        #Incidence
-        dat_incprev = pdIncPrev(STUDY_END_DATE[0],
-                                STUDY_START_DATE[0],
-                                FILENAME,
-                                "GOLD",
-                                batch,
-                                DEMOGRAPHY,
-                                cols,
-                                fileType=fileType)
-        if conf_incprev["merge_EthOtherMixed"]:
-            if 'ETHNICITY' in dat_incprev.raw_data.columns:
-                dat_incprev.raw_data['ETHNICITY'] = \
-                        dat_incprev.raw_data['ETHNICITY'].apply(
-                                lambda x: "OTHERS_AND_MIXED" if x in ('OTHER', 'MIXED') else x)
+        _chunk_size    = conf_incprev.get("streaming_chunk_size")   # None → in-memory path
+        _merge_eth     = conf_incprev.get("merge_EthOtherMixed", False)
+        _calc_grouped  = conf_incprev.get("calc_grouped", True)
 
-        dat_incprev.calculate_incidence(path_out=DIR_OUT)
-        if conf_incprev["calc_grouped"]:
-            dat_incprev.calculate_grouped_incidence(path_out=DIR_OUT)
+        if _chunk_size is not None:
+            # --- Streaming path: single-pass accumulation, chunk_size rows at a time ---
+            # Never loads more than chunk_size rows into memory; safe for 500 GB+ datasets.
+            print(f"Streaming mode: chunk_size={_chunk_size}")
 
-        #Prevalence
-        dat_incprev = pdIncPrev(STUDY_END_DATE[1],
-                                STUDY_START_DATE[1],
-                                FILENAME,
-                                "GOLD",
-                                batch,
-                                DEMOGRAPHY,
-                                cols,
-                                fileType=fileType)
-        if conf_incprev["merge_EthOtherMixed"]:
-            if 'ETHNICITY' in dat_incprev.raw_data.columns:
-                dat_incprev.raw_data['ETHNICITY'] = \
-                        dat_incprev.raw_data['ETHNICITY'].apply(
-                                lambda x: "OTHERS_AND_MIXED" if x in ('OTHER', 'MIXED') else x)
+            dat_inc = pdIncPrev(STUDY_END_DATE[0], STUDY_START_DATE[0],
+                                FILENAME, "GOLD", batch, DEMOGRAPHY, cols,
+                                fileType=fileType, read_data=False)
+            dat_inc.calculate_incidence_streaming(
+                cols=cols, chunk_size=_chunk_size, path_out=DIR_OUT,
+                merge_eth_other_mixed=_merge_eth)
+            if _calc_grouped:
+                dat_inc.calculate_grouped_incidence_streaming(
+                    cols=cols, chunk_size=_chunk_size, path_out=DIR_OUT,
+                    merge_eth_other_mixed=_merge_eth)
 
-        dat_incprev.calculate_prevalence(path_out=DIR_OUT)
-        if conf_incprev["calc_grouped"]:
-            dat_incprev.calculate_grouped_prevalence(path_out=DIR_OUT)
+            dat_prev = pdIncPrev(STUDY_END_DATE[1], STUDY_START_DATE[1],
+                                 FILENAME, "GOLD", batch, DEMOGRAPHY, cols,
+                                 fileType=fileType, read_data=False)
+            dat_prev.calculate_prevalence_streaming(
+                cols=cols, chunk_size=_chunk_size, path_out=DIR_OUT,
+                merge_eth_other_mixed=_merge_eth)
+            if _calc_grouped:
+                dat_prev.calculate_grouped_prevalence_streaming(
+                    cols=cols, chunk_size=_chunk_size, path_out=DIR_OUT,
+                    merge_eth_other_mixed=_merge_eth)
+
+        else:
+            # --- Original in-memory path (unchanged) ---
+            #Incidence
+            dat_incprev = pdIncPrev(STUDY_END_DATE[0],
+                                    STUDY_START_DATE[0],
+                                    FILENAME,
+                                    "GOLD",
+                                    batch,
+                                    DEMOGRAPHY,
+                                    cols,
+                                    fileType=fileType)
+            if _merge_eth:
+                if 'ETHNICITY' in dat_incprev.raw_data.columns:
+                    dat_incprev.raw_data['ETHNICITY'] = \
+                            dat_incprev.raw_data['ETHNICITY'].apply(
+                                    lambda x: "OTHERS_AND_MIXED" if x in ('OTHER', 'MIXED') else x)
+
+            dat_incprev.calculate_incidence(path_out=DIR_OUT)
+            if _calc_grouped:
+                dat_incprev.calculate_grouped_incidence(path_out=DIR_OUT)
+
+            #Prevalence
+            dat_incprev = pdIncPrev(STUDY_END_DATE[1],
+                                    STUDY_START_DATE[1],
+                                    FILENAME,
+                                    "GOLD",
+                                    batch,
+                                    DEMOGRAPHY,
+                                    cols,
+                                    fileType=fileType)
+            if _merge_eth:
+                if 'ETHNICITY' in dat_incprev.raw_data.columns:
+                    dat_incprev.raw_data['ETHNICITY'] = \
+                            dat_incprev.raw_data['ETHNICITY'].apply(
+                                    lambda x: "OTHERS_AND_MIXED" if x in ('OTHER', 'MIXED') else x)
+
+            dat_incprev.calculate_prevalence(path_out=DIR_OUT)
+            if _calc_grouped:
+                dat_incprev.calculate_grouped_prevalence(path_out=DIR_OUT)
 
 if True:#len(BASELINE_DATE_LIST) == 1:
        processBatch(

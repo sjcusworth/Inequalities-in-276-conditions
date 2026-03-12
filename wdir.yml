@@ -344,6 +344,16 @@ incprev:
   batch_size: !!int 50 # how many conditions to process in each paralel process
   INCREMENT_BY_MONTH: !!int 12
   calc_grouped: !!bool True
+
+  # Memory optimisations for large datasets (500 GB+)
+  # Write one column-subset parquet file per SLURM array job during preprocessing,
+  # so each IncPrev.py job reads only the columns it needs (~25 vs ~295 columns).
+  create_batch_files: !!bool False
+
+  # Set to an integer (e.g. 500000) to enable single-pass streaming calculation
+  # in IncPrevMethods, which never loads more than chunk_size rows into memory.
+  # Leave as null to use the default in-memory pandas path.
+  streaming_chunk_size: null
   DEMOGRAPHY: # edit below, using this format
     #if no DEMOGRAPHY, set as empty list []
     - "AGE_CATEGORY"

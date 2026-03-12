@@ -6,7 +6,7 @@ from itertools import repeat
 #import gc
 
 import polars as pl
-from DexterProcessing import process_ethImd
+from DexterProcessing import process_ethImd, create_batch_files
 import pyarrow.dataset as ds
 import yaml
 
@@ -29,6 +29,18 @@ process_ethImd(
         )
 
 #gc.collect()
+
+# --- Optimisation: write per-batch column-subset parquet files ---
+# Enabled via create_batch_files: true in wdir.yml (incprev section).
+# Each dat_batch_{ID}.parquet contains only the columns needed by that SLURM
+# array job, reducing IncPrev.py memory use from ~full-file to ~25 columns.
+if config.get("incprev", {}).get("create_batch_files", False):
+    create_batch_files(
+        path_dir=DIR_DATA,
+        processed_filename=config["incprev"]["filename"],
+        bd_list=config["incprev"]["BD_LIST"],
+        demography=config["incprev"]["DEMOGRAPHY"],
+    )
 
 ## Remove duplicate condition
 #dat = pl.scan_parquet(f"{DIR_DATA}dat_processed.parquet")

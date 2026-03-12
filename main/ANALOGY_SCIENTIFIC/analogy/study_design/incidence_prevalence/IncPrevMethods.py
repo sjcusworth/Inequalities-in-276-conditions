@@ -482,6 +482,322 @@ class IncPrev():
 
 
 
+## Streaming calculation methods ################################################
+# These methods replace the in-memory pandas path with a single-pass chunked
+# accumulator that never loads more than `chunk_size` rows into memory at once.
+# They are called from IncPrev.py when streaming_chunk_size is set in wdir.yml.
+# All existing calculate_* methods are unchanged.
+
+    def _iter_chunks(self, cols, chunk_size):
+        """
+        Yield parsed pandas DataFrame chunks from self.FILENAME using PyArrow.
+
+        Converts INDEX_DATE, END_DATE, and all BD_ columns to datetime, and
+        applies the IMRD DEATH_DATE correction when DATABASE_NAME == "IMRD".
+        """
+        import pyarrow.parquet as pq
+
+        pf = pq.ParquetFile(self.FILENAME)
+        for batch in pf.iter_batches(columns=cols, batch_size=chunk_size):
+            df = batch.to_pandas()
+            df['INDEX_DATE'] = pd.to_datetime(df['INDEX_DATE'])
+            df['END_DATE']   = pd.to_datetime(df['END_DATE'])
+            for col in df.columns:
+                if col.startswith('BD_'):
+                    df[col] = pd.to_datetime(df[col])
+            if self.DATABASE_NAME == "IMRD":
+                df['DEATH_DATE']    = pd.to_datetime(df['DEATH_DATE'])
+                df['TRANSFER_DATE'] = pd.to_datetime(df['TRANSFER_DATE'])
+                mask = df['DEATH_DATE'].isna() & (df['REGISTRATION_STATUS'] == 99)
+                df.loc[mask, 'DEATH_DATE'] = df.loc[mask, 'TRANSFER_DATE']
+                df['END_DATE'] = df[['DEATH_DATE', 'END_DATE']].min(axis=1)
+            yield df
+
+    def _build_time_windows(self):
+        """
+        Return (inc_windows, prev_dates) built from study config.
+
+        inc_windows : list of (start_datetime, end_datetime) pairs, one per
+                      INCREMENT_BY_MONTH period, used for incidence.
+        prev_dates  : list of start_datetime values, one per period, used for
+                      prevalence (point-in-time).
+        """
+        inc_windows, prev_dates = [], []
+        current = self.STUDY_START_DATE
+        while current < self.STUDY_END_DATE:
+            delta = relativedelta(months=self.INCREMENT_BY_MONTH)
+            end = min(self.STUDY_END_DATE, current + delta)
+            inc_windows.append((current, end))
+            prev_dates.append(current)
+            current += delta
+        return inc_windows, prev_dates
+
+    # ---- overall streaming incidence ----------------------------------------
+
+    def calculate_incidence_streaming(self, cols, chunk_size=500_000,
+                                      sub_name="_Inc", path_out="./",
+                                      merge_eth_other_mixed=False):
+        """
+        Single-pass streaming incidence calculation.
+
+        Accumulates numerator (event counts) and denominator (person-years)
+        for every (condition, time-period) pair across all chunks, then
+        computes rates from the totals.  Peak memory is proportional to
+        chunk_size, not to the full dataset size.
+        """
+        inc_windows, _ = self._build_time_windows()
+
+        # acc[bd_col][i] = [numerator_count, person_years]
+        acc = {bd: [[0, 0.0] for _ in inc_windows]
+               for bd in self.BASELINE_DATE_LIST}
+
+        for df in self._iter_chunks(cols, chunk_size):
+            if merge_eth_other_mixed and 'ETHNICITY' in df.columns:
+                df.loc[df['ETHNICITY'].isin(['OTHER', 'MIXED']),
+                       'ETHNICITY'] = 'OTHERS_AND_MIXED'
+
+            for bd_col in self.BASELINE_DATE_LIST:
+                for i, (start_yr, end_yr) in enumerate(inc_windows):
+                    num_mask  = self.get_numerator_filter_inc(
+                        df, start_yr, end_yr, bd_col)
+                    denom_mask = self.get_denominator_filter_inc(
+                        df, start_yr, end_yr, bd_col)
+                    denom_df  = df.iloc[denom_mask]
+
+                    acc[bd_col][i][0] += len(df.iloc[num_mask])
+
+                    if not denom_df.empty:
+                        delta_days   = (end_yr - start_yr).days
+                        start_period = self.get_start_period(denom_df, start_yr)
+                        end_period   = self.get_end_period(denom_df, end_yr, bd_col)
+                        py = (end_period - start_period).dt.days.replace(0, 1)
+                        acc[bd_col][i][1] += float((py / delta_days).sum())
+
+        for bd_col in self.BASELINE_DATE_LIST:
+            inc_list = []
+            for i, (start_yr, end_yr) in enumerate(inc_windows):
+                num   = acc[bd_col][i][0]
+                denom = acc[bd_col][i][1] + self.SMALL_FP_VAL
+                inc_list.append((
+                    start_yr.date(),
+                    (num / denom) * self.PER_PY,
+                    denom,
+                    num,
+                    self.byars_lower(num, denom)  * self.PER_PY,
+                    self.byars_higher(num, denom) * self.PER_PY,
+                ))
+            filename = re.sub('[^A-Za-z0-9]+', '',
+                              bd_col.replace("BD_MEDI:", '').replace("_BIRM_CAM", ''))
+            self.save_dataframe_inc(
+                inc_list, filename + "_OVERALL" + sub_name + ".csv",
+                path_out=path_out)
+
+    # ---- grouped streaming incidence ----------------------------------------
+
+    def calculate_grouped_incidence_streaming(self, cols, chunk_size=500_000,
+                                              sub_name="_Inc", path_out="./",
+                                              merge_eth_other_mixed=False):
+        """
+        Single-pass streaming grouped incidence calculation.
+
+        Accumulates per (condition, demographic group, time-period) across all
+        chunks.  Group keys are discovered dynamically as chunks are processed.
+        """
+        inc_windows, _ = self._build_time_windows()
+        n_periods = len(inc_windows)
+
+        # acc[bd_col][str(demo)][group_name][i] = [num, person_years]
+        acc = {bd: {str(demo): {} for demo in self.DEMOGRAPHY}
+               for bd in self.BASELINE_DATE_LIST}
+
+        for df in self._iter_chunks(cols, chunk_size):
+            if merge_eth_other_mixed and 'ETHNICITY' in df.columns:
+                df.loc[df['ETHNICITY'].isin(['OTHER', 'MIXED']),
+                       'ETHNICITY'] = 'OTHERS_AND_MIXED'
+
+            for bd_col in self.BASELINE_DATE_LIST:
+                for demo in self.DEMOGRAPHY:
+                    demo_key = str(demo)
+                    for i, (start_yr, end_yr) in enumerate(inc_windows):
+                        delta_days = (end_yr - start_yr).days
+
+                        # Numerator rows for this period
+                        num_mask_bool = (
+                            df[bd_col].between(start_yr, end_yr, inclusive='left') &
+                            (df['END_DATE']    >= start_yr) &
+                            (df['INDEX_DATE']  <  end_yr)   &
+                            (df[bd_col]        >  df['INDEX_DATE'])
+                        )
+                        # Denominator rows for this period
+                        denom_mask_bool = (
+                            (df['END_DATE']   >= start_yr) &
+                            (df['INDEX_DATE'] <  end_yr)   &
+                            (df[bd_col].isna() |
+                             ((df[bd_col] >= start_yr) & (df[bd_col] > df['INDEX_DATE'])))
+                        )
+
+                        # Person-years per denominator row
+                        denom_df = df[denom_mask_bool].copy()
+                        if not denom_df.empty:
+                            sp = self.get_start_period(denom_df, start_yr)
+                            ep = self.get_end_period(denom_df, end_yr, bd_col)
+                            denom_df['_py'] = (
+                                (ep - sp).dt.days.replace(0, 1) / delta_days
+                            )
+
+                        # Aggregate numerator counts by demographic group
+                        num_df = df[num_mask_bool]
+                        if not num_df.empty:
+                            for name, count in num_df.groupby(demo).size().items():
+                                if name not in acc[bd_col][demo_key]:
+                                    acc[bd_col][demo_key][name] = [
+                                        [0, 0.0] for _ in range(n_periods)]
+                                acc[bd_col][demo_key][name][i][0] += int(count)
+
+                        # Aggregate person-years by demographic group
+                        if not denom_df.empty:
+                            for name, py_sum in denom_df.groupby(demo)['_py'].sum().items():
+                                if name not in acc[bd_col][demo_key]:
+                                    acc[bd_col][demo_key][name] = [
+                                        [0, 0.0] for _ in range(n_periods)]
+                                acc[bd_col][demo_key][name][i][1] += float(py_sum)
+
+        for bd_col in self.BASELINE_DATE_LIST:
+            filename = re.sub('[^A-Za-z0-9]+', '',
+                              bd_col.replace("BD_MEDI:", '').replace("_BIRM_CAM", ''))
+            for demo in self.DEMOGRAPHY:
+                inc_list = []
+                for name, pacc in acc[bd_col][str(demo)].items():
+                    for i, (start_yr, _) in enumerate(inc_windows):
+                        num   = pacc[i][0]
+                        denom = pacc[i][1] + self.SMALL_FP_VAL
+                        inc_list.append((
+                            start_yr.date(), name,
+                            (num / denom) * self.PER_PY,
+                            denom, num,
+                            self.byars_lower(num, denom)  * self.PER_PY,
+                            self.byars_higher(num, denom) * self.PER_PY,
+                        ))
+                demo_label = str(demo)[1:-1] if isinstance(demo, list) else str(demo)
+                self.save_dataframe_inc(
+                    inc_list,
+                    filename + "_" + demo_label + sub_name + ".csv",
+                    demo_label, path_out=path_out)
+
+    # ---- overall streaming prevalence ---------------------------------------
+
+    def calculate_prevalence_streaming(self, cols, chunk_size=500_000,
+                                       sub_name="_Prev", path_out="./",
+                                       merge_eth_other_mixed=False):
+        """
+        Single-pass streaming prevalence calculation.
+
+        Accumulates numerator (event count) and denominator (active patient
+        count) for every (condition, study-date) pair across all chunks.
+        """
+        _, prev_dates = self._build_time_windows()
+
+        # acc[bd_col][i] = [numerator_count, denominator_count]
+        acc = {bd: [[0, 0] for _ in prev_dates]
+               for bd in self.BASELINE_DATE_LIST}
+
+        for df in self._iter_chunks(cols, chunk_size):
+            if merge_eth_other_mixed and 'ETHNICITY' in df.columns:
+                df.loc[df['ETHNICITY'].isin(['OTHER', 'MIXED']),
+                       'ETHNICITY'] = 'OTHERS_AND_MIXED'
+
+            for bd_col in self.BASELINE_DATE_LIST:
+                for i, p in enumerate(prev_dates):
+                    active = (df['INDEX_DATE'] <= p) & (df['END_DATE'] >= p)
+                    acc[bd_col][i][0] += int((active & (df[bd_col] <= p)).sum())
+                    acc[bd_col][i][1] += int(active.sum())
+
+        for bd_col in self.BASELINE_DATE_LIST:
+            prev_list = []
+            for i, p in enumerate(prev_dates):
+                num   = acc[bd_col][i][0]
+                denom = acc[bd_col][i][1] + self.SMALL_FP_VAL
+                prev_list.append((
+                    p.date(),
+                    (num / denom) * self.PER_PY,
+                    int(denom),
+                    num,
+                    self.byars_lower(num, denom)  * self.PER_PY,
+                    self.byars_higher(num, denom) * self.PER_PY,
+                ))
+            filename = re.sub('[^A-Za-z0-9]+', '',
+                              bd_col.replace("BD_MEDI:", '').replace("_BIRM_CAM", ''))
+            self.save_dataframe_prev(
+                prev_list, filename + "_OVERALL" + sub_name + ".csv",
+                path_out=path_out)
+
+    # ---- grouped streaming prevalence ---------------------------------------
+
+    def calculate_grouped_prevalence_streaming(self, cols, chunk_size=500_000,
+                                               sub_name="_Prev", path_out="./",
+                                               merge_eth_other_mixed=False):
+        """
+        Single-pass streaming grouped prevalence calculation.
+
+        Accumulates per (condition, demographic group, study-date) across all
+        chunks.  Group keys are discovered dynamically as chunks are processed.
+        """
+        _, prev_dates = self._build_time_windows()
+        n_periods = len(prev_dates)
+
+        # acc[bd_col][str(demo)][group_name][i] = [num, denom]
+        acc = {bd: {str(demo): {} for demo in self.DEMOGRAPHY}
+               for bd in self.BASELINE_DATE_LIST}
+
+        for df in self._iter_chunks(cols, chunk_size):
+            if merge_eth_other_mixed and 'ETHNICITY' in df.columns:
+                df.loc[df['ETHNICITY'].isin(['OTHER', 'MIXED']),
+                       'ETHNICITY'] = 'OTHERS_AND_MIXED'
+
+            for bd_col in self.BASELINE_DATE_LIST:
+                for demo in self.DEMOGRAPHY:
+                    demo_key = str(demo)
+                    for i, p in enumerate(prev_dates):
+                        active_df = df[(df['INDEX_DATE'] <= p) &
+                                       (df['END_DATE']   >= p)].copy()
+                        if active_df.empty:
+                            continue
+                        active_df['_event'] = (active_df[bd_col] <= p).astype('int8')
+
+                        grp_num   = active_df.groupby(demo)['_event'].sum()
+                        grp_denom = active_df.groupby(demo).size()
+
+                        for name in grp_denom.index:
+                            if name not in acc[bd_col][demo_key]:
+                                acc[bd_col][demo_key][name] = [
+                                    [0, 0] for _ in range(n_periods)]
+                            acc[bd_col][demo_key][name][i][0] += int(grp_num[name])
+                            acc[bd_col][demo_key][name][i][1] += int(grp_denom[name])
+
+        for bd_col in self.BASELINE_DATE_LIST:
+            filename = re.sub('[^A-Za-z0-9]+', '',
+                              bd_col.replace("BD_MEDI:", '').replace("_BIRM_CAM", ''))
+            for demo in self.DEMOGRAPHY:
+                prev_list = []
+                for name, pacc in acc[bd_col][str(demo)].items():
+                    for i, p in enumerate(prev_dates):
+                        num   = pacc[i][0]
+                        denom = pacc[i][1] + self.SMALL_FP_VAL
+                        prev_list.append((
+                            p.date(), name,
+                            (num / denom) * self.PER_PY,
+                            int(denom),
+                            num,
+                            self.byars_lower(num, denom)  * self.PER_PY,
+                            self.byars_higher(num, denom) * self.PER_PY,
+                        ))
+                demo_label = str(demo)[1:-1] if isinstance(demo, list) else str(demo)
+                self.save_dataframe_prev(
+                    prev_list,
+                    filename + "_" + demo_label + sub_name + ".csv",
+                    demo_label, path_out=path_out)
+
+################################################################################
 ## Standardisation Feature ##############################
 
 class StrdIncPrev(IncPrev):
